@@ -1,0 +1,28 @@
+# Data (too large)
+data/raw/
+data/cache/
+data/odds/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.env
+venv/
+wnba_model/
+
+# Logs (generated at runtime)
+logs/*.log
+logs/update_log.json
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Backtesting
+backtest_multi.py
+backtest_real_odds.py
+*.ipynb

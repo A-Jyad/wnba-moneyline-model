@@ -1,0 +1,49 @@
+name: Daily WNBA Predictions
+
+on:
+  schedule:
+    - cron: '0 23 * * *'   # 7am Malaysia time (MYT = UTC+8)
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  predict:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4.2.2
+
+      - name: Set up Python
+        uses: actions/setup-python@v5.3.0
+        with:
+          python-version: '3.11'
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4.2.0
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run predictions
+        run: python predict.py
+        env:
+          PYTHONPATH: .
+
+      - name: Commit predictions CSV
+        run: |
+          git config --global user.name "WNBA Model Bot"
+          git config --global user.email "bot@wnba-model.com"
+          git add logs/predictions_*.csv
+          git diff --staged --quiet || git commit -m "Auto predictions $(date +'%Y-%m-%d')"
+          git push
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
