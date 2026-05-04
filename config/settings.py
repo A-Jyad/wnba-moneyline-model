@@ -8,6 +8,7 @@ from datetime import date
 ROOT_DIR   = Path(__file__).parent.parent
 DATA_DIR   = ROOT_DIR / "data"
 CACHE_DIR  = DATA_DIR / "cache"
+RAW_DIR  = DATA_DIR / "raw"
 PROC_DIR   = DATA_DIR / "processed"
 ODDS_DIR   = DATA_DIR / "odds"
 MODEL_DIR  = ROOT_DIR / "models"
@@ -16,10 +17,13 @@ LOG_DIR    = ROOT_DIR / "logs"
 for d in [CACHE_DIR, PROC_DIR, ODDS_DIR, MODEL_DIR, LOG_DIR]:
     d.mkdir(parents=True, exist_ok=True)
 
+
 # ── WNBA API ──────────────────────────────────────────────────────────────────
 LEAGUE_ID        = "10"          # WNBA league ID (NBA = "00")
 WNBA_STATS_BASE  = "https://stats.wnba.com/stats"
 REQUEST_DELAY    = 1.5           # seconds between API calls
+REQUEST_TIMEOUT = 30    # seconds
+
 
 # ── Season ────────────────────────────────────────────────────────────────────
 def _get_current_season() -> str:
@@ -33,10 +37,38 @@ VALID_SEASON     = "2023"  # Now training on 8 seasons (2015-2022)
 TEST_SEASON      = "2024"
 TEST_SEASON_2    = "2025"
 
-ALL_SEASONS      = ["2015", "2016", "2017", "2018", "2019", "2020", "2021", "2022", "2023", "2024", "2025"]
-BACKTEST_SEASONS = ["2022", "2023", "2024", "2025"]
+SEASONS      = ["2015", "2016", "2017", "2018", "2019", "2020", "2021", "2022", "2023", "2024", "2025"]
+BACKTEST_SEASONS = ["2024", "2025"]
+SEASON_TYPES = ['Regular Season']
+
+
+# ── Feature Engineering ──────────────────────────────────────────────────────
+ROLLING_WINDOWS   = [5, 10, 20]      # games for rolling averages
+DECAY_HALFLIFE    = 10               # exponential decay half-life (games)
+HOME_COURT_EDGE   = 2.5              # points, used for Elo adjustment
+
 
 # ── Model ─────────────────────────────────────────────────────────────────────
+RANDOM_SEED      = 42
+
+# Logistic Regression
+LR_PARAMS = {"C": 0.1, "max_iter": 1000, "random_state": RANDOM_SEED}
+
+# XGBoost
+XGB_PARAMS = {
+    "n_estimators": 400, "max_depth": 4, "learning_rate": 0.03,
+    "subsample": 0.8, "colsample_bytree": 0.8,
+    "use_label_encoder": False, "eval_metric": "logloss",
+    "random_state": RANDOM_SEED, "n_jobs": -1,
+}
+
+# LightGBM
+LGB_PARAMS = {
+    "n_estimators": 400, "max_depth": 4, "learning_rate": 0.03,
+    "subsample": 0.8, "colsample_bytree": 0.8,
+    "random_state": RANDOM_SEED, "n_jobs": -1, "verbose": -1,
+}
+
 ENSEMBLE_WEIGHTS = {
     "lr":  0.25,
     "xgb": 0.35,
@@ -44,8 +76,16 @@ ENSEMBLE_WEIGHTS = {
     "elo": 0.05,
 }
 
-ELO_K_FACTOR     = 20
-ELO_START        = 1500
+
+# ── Elo ──────────────────────────────────────────────────────────────────────
+ELO_K            = 20       # K-factor
+ELO_START        = 1500     # starting rating
+ELO_REGRESS_FRAC = 0.33     # regression to mean each new season
+
+
+# ── Edge Detection ───────────────────────────────────────────────────────────
+VIG_REMOVE_METHOD= "multiplicative"  # "additive" or "multiplicative"
+
 
 # ── Betting Filters ───────────────────────────────────────────────────────────
 # Optimised April 2026 on clean seasons 2024+2025:
@@ -64,3 +104,14 @@ BET_MAX_EDGE       = 60.0
 KELLY_FRACTION     = 0.25
 MAX_BET_PCT        = 3.0
 MIN_BET_UNITS      = 0.5
+
+
+# ── Logging ──────────────────────────────────────────────────────────────────
+BET_LOG_FILE     = LOG_DIR / "bet_log.csv"
+BET_LOG_COLS     = [
+    "date", "game_id", "home_team", "away_team",
+    "model_prob_home", "market_implied_home",
+    "edge_pct", "bet_side", "american_odds",
+    "kelly_units", "result", "pnl_units", "notes",
+]
+

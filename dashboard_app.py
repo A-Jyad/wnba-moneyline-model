@@ -54,6 +54,16 @@ def save_bets(bets):
 # ── Backtest data ─────────────────────────────────────────────────────────────
 LOG_DIR = ROOT / "logs"
 
+CLOSING_BOOKS = {
+    "pinnacle":      "Pinnacle",
+    "draftkings":    "DraftKings",
+    "fanduel":       "FanDuel",
+    "betfair_ex_eu": "Betfair EU",
+    "unibet_uk":     "Unibet UK",
+    "betsson":       "Betsson",
+    "nordicbet":     "NordicBet",
+}
+
 BACKTEST_FILES = {
     "2022": LOG_DIR / "backtest_real_2022.csv",
     "2023": LOG_DIR / "backtest_real_2023.csv",
@@ -88,11 +98,51 @@ def load_all_backtest():
             combined[col] = pd.to_numeric(combined[col], errors="coerce")
     return combined
 
+@st.cache_data(ttl=3600)
+def load_closing_book(book_key: str) -> pd.DataFrame:
+    dfs = []
+    for season in ["2022", "2023", "2024", "2025"]:
+        path = LOG_DIR / f"backtest_{book_key}_{season}.csv"
+        if not path.exists():
+            continue
+        df = pd.read_csv(path)
+        df["season"] = season
+        df = df.rename(columns={
+            "p_home_win": "model_prob_home",
+            "home_ml":    "home_odds",
+            "away_ml":    "away_odds",
+        })
+        for col in ["model_prob_home", "home_odds", "away_odds", "home_won"]:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+        dfs.append(df)
+    if not dfs:
+        return pd.DataFrame()
+    return pd.concat(dfs, ignore_index=True)
+
 @st.cache_data(ttl=300)
-def load_todays_predictions():
-    today = date.today().strftime("%Y-%m-%d")
-    f = LOG_DIR / f"predictions_{today}.csv"
+def load_predictions_for_date(target_date: str) -> pd.DataFrame:
+    f = LOG_DIR / f"predictions_{target_date}.csv"
     return pd.read_csv(f) if f.exists() else pd.DataFrame()
+
+@st.cache_data(ttl=300)
+def load_raw_odds_for_date(target_date: str) -> list:
+    try:
+        from src.odds_scraper import get_todays_odds
+        return get_todays_odds(target_date=target_date)
+    except Exception:
+        return []
+
+@st.cache_data(ttl=1800)
+def load_live_injury_report() -> pd.DataFrame:
+    try:
+        from src.scraper import fetch_injury_report
+        df = fetch_injury_report()
+        return df if not df.empty else pd.DataFrame(
+            columns=["team", "player", "status", "reason", "TEAM_ABBREVIATION"])
+    except Exception:
+        return pd.DataFrame(
+            columns=["team", "player", "status", "reason", "TEAM_ABBREVIATION"])
 
 # ── Filter engine ─────────────────────────────────────────────────────────────
 def implied_prob(ml):
@@ -173,28 +223,88 @@ page = st.sidebar.radio("", [
 # ══════════════════════════════════════════════════════════════════════════════
 
 if page == "🏀 Today's Predictions":
-    st.title("🏀 Today's WNBA Predictions")
-    st.caption(date.today().strftime("%A, %B %d, %Y"))
+    from datetime import timedelta
 
-    col_r, col_b = st.columns([4,1])
+    today     = date.today()
+    date_opts = [(today + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(8)]
+    day_names = (["Today", "Tomorrow"]
+                 + [(today + timedelta(days=i)).strftime("%a %b %d") for i in range(2, 8)])
+
+    st.title("🏀 WNBA Predictions")
+
+    selected_date = st.radio(
+        "date_range", options=date_opts,
+        format_func=lambda d: day_names[date_opts.index(d)],
+        horizontal=True, label_visibility="collapsed",
+    )
+    st.caption(date.fromisoformat(selected_date).strftime("%A, %B %d, %Y"))
+
+    _, col_b = st.columns([4, 1])
     with col_b:
-        if st.button("🔄 Refresh", use_container_width=True):
+        if st.button("🔄 Refresh / Generate", use_container_width=True):
             st.cache_data.clear()
             try:
                 from src.predict import predict_today, get_current_season
-                predict_today(season=get_current_season())
-                st.success("Updated!")
+                result = predict_today(target_date=selected_date,
+                                       season=get_current_season(selected_date))
+                st.success(f"Updated! {len(result)} games." if result is not None and not result.empty
+                           else "No games found.")
             except Exception as e:
                 st.error(str(e))
 
-    preds = load_todays_predictions()
+    preds      = load_predictions_for_date(selected_date)
+    raw_odds   = load_raw_odds_for_date(selected_date)
+    inj_report = load_live_injury_report()
+    has_inj    = not inj_report.empty and "TEAM_ABBREVIATION" in inj_report.columns
+
+    def _team_injuries(team):
+        if not has_inj:
+            return []
+        rows = inj_report[inj_report["TEAM_ABBREVIATION"] == team]
+        return [(r["player"], r.get("status", "")) for _, r in rows.iterrows()
+                if pd.notna(r["player"])]
+
+    def _pinnacle(home, away):
+        for g in raw_odds:
+            if (g.get("home_team","").upper() == home.upper() and
+                    g.get("away_team","").upper() == away.upper()):
+                return g.get("bookmakers", {}).get("pinnacle") or {}
+        return {}
 
     if preds.empty:
-        st.info("No predictions yet. Click Refresh or run: `python predict.py`")
-        with st.expander("📋 Enter odds manually"):
-            st.code('python predict.py --odds "LAS:-150,IND:+130;NYL:-200,CON:+170"')
+        if raw_odds:
+            st.info("No model predictions yet — showing live odds. Click **Refresh / Generate** to run the model.")
+            st.subheader("📊 Odds Board")
+            for g in raw_odds:
+                ht = g.get("home_team","?"); at = g.get("away_team","?")
+                pinn = g.get("bookmakers",{}).get("pinnacle",{})
+                commence = g.get("commence_time","")
+                c1, c2 = st.columns([3, 3])
+                with c1:
+                    st.markdown(f"**{ht}** vs {at}")
+                    if commence:
+                        try:
+                            dt = datetime.fromisoformat(commence.replace("Z","+00:00"))
+                            st.caption(dt.strftime("%b %d  %H:%M UTC"))
+                        except:
+                            st.caption(commence[:16])
+                    for tm, players in [(ht, _team_injuries(ht)), (at, _team_injuries(at))]:
+                        if players:
+                            names = ", ".join(f"{p} ({s})" for p, s in players)
+                            st.markdown(f"<span style='color:#f5a623;font-size:12px'>⚠️ {tm}: {names}</span>",
+                                        unsafe_allow_html=True)
+                with c2:
+                    if pinn:
+                        st.markdown(f"**Pinnacle:** {ht} {fmt_ml(pinn.get('home',0))} / {at} {fmt_ml(pinn.get('away',0))}")
+                    else:
+                        st.caption("No Pinnacle line")
+                st.divider()
+        else:
+            st.info("No predictions yet. Click **Refresh / Generate** or run: `python predict.py`")
+            if selected_date == today.strftime("%Y-%m-%d"):
+                with st.expander("📋 Enter odds manually"):
+                    st.code('python predict.py --odds "LAS:-150,IND:+130;NYL:-200,CON:+170"')
     else:
-        # Load filter settings
         try:
             from config.settings import MIN_EDGE_PCT, BET_MAX_ODDS, BET_MIN_ODDS
             live_min_edge = st.session_state.get("saved_min_edge", int(MIN_EDGE_PCT))
@@ -211,14 +321,12 @@ if page == "🏀 Today's Predictions":
 
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("Games", len(preds))
-        m2.metric("Flagged Bets", len(flagged),
-                  delta="⭐ BET" if len(flagged) > 0 else None)
+        m2.metric("Flagged Bets", len(flagged), delta="⭐ BET" if len(flagged) > 0 else None)
         m3.metric("Min Edge", f"{live_min_edge}%")
         m4.metric("Odds Range", f"+{live_min_odds}–+{live_max_odds}")
-
         st.divider()
 
-        # Flagged bets
+        # ── Flagged bets ──────────────────────────────────────────────────────
         if len(flagged) > 0:
             st.subheader("⭐ Flagged Bets")
             for _, row in flagged.iterrows():
@@ -227,54 +335,70 @@ if page == "🏀 Today's Predictions":
                 odds_str = rec.split("(")[1].split(")")[0] if "(" in rec else "?"
                 edge_str = rec.split("Edge: ")[1].split("%")[0] if "Edge:" in rec else "?"
                 ev_str   = rec.split("EV: ")[1] if "EV:" in rec else "—"
-                p_home   = float(row.get("p_home_win", 0.5))
                 kelly    = float(row.get("kelly_units", 0) or 0)
+                home     = row.get("home_team","?")
+                away     = row.get("away_team","?")
+                home_imp = float(row.get("home_injury_impact", 0) or 0)
+                away_imp = float(row.get("away_injury_impact", 0) or 0)
 
                 with st.container():
-                    c1,c2,c3,c4 = st.columns([3,2,2,2])
+                    c1, c2, c3, c4 = st.columns([3,2,2,2])
                     with c1:
-                        st.markdown(f"### {row.get('home_team','?')} vs {row.get('away_team','?')}")
+                        st.markdown(f"### {home} vs {away}")
                         st.markdown(f"**🎯 BET {bet_team} ({odds_str})**")
+                        for tm, players, imp in [(home, _team_injuries(home), home_imp),
+                                                  (away, _team_injuries(away), away_imp)]:
+                            if players:
+                                names   = ", ".join(f"{p} ({s})" for p, s in players)
+                                imp_str = f" — {imp:.0%} impact" if imp > 0.01 else ""
+                                st.markdown(
+                                    f"<span style='color:#f5a623'>⚠️ **{tm}:** {names}{imp_str}</span>",
+                                    unsafe_allow_html=True)
                     c2.metric("Edge", f"{edge_str}%")
                     c3.metric("EV", ev_str)
                     c4.metric("Kelly %", f"{kelly:.1f}%")
-
-                    if st.button(f"✅ Log bet — {bet_team}",
-                                 key=f"log_{row.get('home_team','')}_{row.get('away_team','')}"):
+                    if st.button(f"✅ Log bet — {bet_team}", key=f"log_{home}_{away}"):
                         bets = load_bets()
-                        bets.append({
-                            "date": date.today().isoformat(),
-                            "home_team": row.get("home_team",""),
-                            "away_team": row.get("away_team",""),
-                            "bet_team": bet_team, "bet_odds": odds_str,
-                            "edge_pct": edge_str, "result": "pending",
-                            "units": 1.0, "pnl": None,
-                        })
+                        bets.append({"date": selected_date, "home_team": home, "away_team": away,
+                                     "bet_team": bet_team, "bet_odds": odds_str, "edge_pct": edge_str,
+                                     "result": "pending", "units": 1.0, "pnl": None})
                         save_bets(bets)
                         st.success("Logged!")
                         st.rerun()
                     st.divider()
 
-        # All games
+        # ── All games ─────────────────────────────────────────────────────────
         st.subheader("All Games")
         for _, row in preds.iterrows():
-            home   = row.get("home_team","?")
-            away   = row.get("away_team","?")
-            p_home = float(row.get("p_home_win", row.get("model_prob_home", 0.5)))
-            rec    = str(row.get("recommendation",""))
-            is_bet = "BET" in rec and "NO BET" not in rec
-            elo    = float(row.get("elo_diff", 0) or 0)
-            b2b_h  = " [B2B]" if row.get("home_b2b") else ""
-            b2b_a  = " [B2B]" if row.get("away_b2b") else ""
-            home_ml = row.get("home_ml")
-            away_ml = row.get("away_ml")
+            home    = row.get("home_team","?")
+            away    = row.get("away_team","?")
+            p_home  = float(row.get("p_home_win", row.get("model_prob_home", 0.5)))
+            rec     = str(row.get("recommendation",""))
+            is_bet  = "BET" in rec and "NO BET" not in rec
+            elo     = float(row.get("elo_diff", 0) or 0)
+            b2b_h   = " [B2B]" if row.get("home_b2b") else ""
+            b2b_a   = " [B2B]" if row.get("away_b2b") else ""
             edge_h  = row.get("edge_home_pct")
             edge_a  = row.get("edge_away_pct")
+            home_imp = float(row.get("home_injury_impact", 0) or 0)
+            away_imp = float(row.get("away_injury_impact", 0) or 0)
+
+            pinn   = _pinnacle(home, away)
+            pinn_h = pinn.get("home") if pinn else row.get("home_ml")
+            pinn_a = pinn.get("away") if pinn else row.get("away_ml")
 
             c1, c2, c3 = st.columns([2, 4, 3])
             with c1:
                 st.markdown(f"**{home}{b2b_h}** vs {away}{b2b_a}")
                 st.caption(f"Elo: {elo:+.0f}")
+                for tm, players, imp in [(home, _team_injuries(home), home_imp),
+                                          (away, _team_injuries(away), away_imp)]:
+                    if players:
+                        names   = ", ".join(f"{p} ({s})" for p, s in players)
+                        imp_str = f" ({imp:.0%})" if imp > 0.01 else ""
+                        st.markdown(
+                            f"<span style='color:#f5a623;font-size:12px'>⚠️ {tm}{imp_str}: {names}</span>",
+                            unsafe_allow_html=True)
             with c2:
                 bar = "█"*int(p_home*20) + "░"*(20-int(p_home*20))
                 st.markdown(f"`{bar}` {p_home*100:.0f}% / {(1-p_home)*100:.0f}%")
@@ -288,16 +412,15 @@ if page == "🏀 Today's Predictions":
                     st.caption(rec)
             with c3:
                 try:
-                    if home_ml is not None and away_ml is not None:
-                        hml = int(float(home_ml)); aml = int(float(away_ml))
-                        h_str = f"+{hml}" if hml > 0 else str(hml)
-                        a_str = f"+{aml}" if aml > 0 else str(aml)
-                        if edge_h is not None:
+                    if pinn_h is not None and pinn_a is not None:
+                        h_str = fmt_ml(pinn_h); a_str = fmt_ml(pinn_a)
+                        if edge_h is not None and str(edge_h) != "nan":
                             eh = float(edge_h); ea = float(edge_a)
                             hc = "#3ddc84" if eh > 0 else "#ff4b4b"
                             ac = "#3ddc84" if ea > 0 else "#ff4b4b"
                             st.markdown(
                                 f"<div style='font-size:13px;line-height:1.8'>"
+                                f"<span style='color:#aaa;font-size:11px'>Pinnacle</span><br>"
                                 f"<span style='color:#aaa'>{home}:</span> <b>{h_str}</b> "
                                 f"<span style='color:{hc}'>({eh:+.1f}%)</span><br>"
                                 f"<span style='color:#aaa'>{away}:</span> <b>{a_str}</b> "
@@ -306,6 +429,7 @@ if page == "🏀 Today's Predictions":
                         else:
                             st.markdown(
                                 f"<div style='font-size:13px;line-height:1.8'>"
+                                f"<span style='color:#aaa;font-size:11px'>Pinnacle</span><br>"
                                 f"<span style='color:#aaa'>{home}:</span> <b>{h_str}</b><br>"
                                 f"<span style='color:#aaa'>{away}:</span> <b>{a_str}</b></div>",
                                 unsafe_allow_html=True)
@@ -322,12 +446,19 @@ elif page == "🔬 Filter Playground":
     st.title("🔬 Filter Playground")
     st.caption("Adjust filters and instantly see the impact on backtest performance.")
 
-    raw = load_all_backtest()
-    available_seasons = sorted(raw["season"].unique().tolist()) if not raw.empty else []
+    # ── Data source selector ─────────────────────────────────────────────────
+    src_labels = list(CLOSING_BOOKS.values())
+    src_keys   = list(CLOSING_BOOKS.keys())
+    chosen_book_key = src_keys[src_labels.index(
+        st.selectbox("Book", src_labels, index=src_labels.index("Pinnacle"))
+    )]
 
+    raw = load_closing_book(chosen_book_key)
     if raw.empty:
-        st.warning("No backtest data found. Run: `python backtest_real_odds.py --all --edge 15`")
+        st.warning(f"No {CLOSING_BOOKS[chosen_book_key]} closing data found. Run: `python backtest_closing.py --all --edge 1`")
         st.stop()
+
+    available_seasons = sorted(raw["season"].unique().tolist())
 
     # Only show validation + clean seasons (hide training seasons)
     SHOW_SEASONS = CLEAN_SEASONS + VALID_SEASONS

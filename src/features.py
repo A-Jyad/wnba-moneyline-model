@@ -1,41 +1,240 @@
+import sys
+from pathlib import Path
+
+# Ensure project root is on sys.path however the script is invoked
+_SRC_DIR  = Path(__file__).resolve().parent          # .../nba_predictor/src
+_ROOT_DIR = _SRC_DIR.parent                          # .../nba_predictor
+for _p in [str(_ROOT_DIR), str(_ROOT_DIR.parent)]:
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 """
-WNBA Feature Engineering v3
-New vs v2:
-- Opponent-adjusted stats (opponent Elo-weighted plus/minus)
-- Head-to-head rolling win rate (last 2 seasons)
-- Strength of schedule (avg Elo of last 5 opponents)
-- Home court advantage per team (rolling home win rate)
-- Season phase refinement
-- All v2 features retained
+features.py — Feature engineering pipeline.
+
+Takes raw game log DataFrame and produces a game-level feature matrix
+where each row = one game, from the HOME team's perspective.
+
+Features built:
+  - Rolling team offense/defense ratings (5/10/20 game windows, decay-weighted)
+  - Elo ratings (updated game-by-game)
+  - Rest advantage (days since last game, back-to-back flag)
+  - Travel proxy (home/away streak)
+  - Opponent-adjusted efficiency
+  - Season SRS-style power rating
+  - Win streak / momentum
 """
+
 import logging
+
 import numpy as np
 import pandas as pd
 
-from config.settings import PROC_DIR
 from src.elo import EloSystem
+from config.settings import (
+    ROLLING_WINDOWS, DECAY_HALFLIFE, HOME_COURT_EDGE,
+    ELO_K, ELO_START, ELO_REGRESS_FRAC, 
+    RAW_DIR, PROC_DIR,
+)
 
 log = logging.getLogger("features")
 
-TEAM_ABB_MAP = {
-    "LVA": "LAS",   # Las Vegas Aces (current)
-    "LAS": "LA",    # Los Angeles Sparks
-    "PHX": "PHO",   # Phoenix Mercury
-    "SAN": "SAS",   # San Antonio Stars (became LAS in 2018)
-    "TUL": "DAL",   # Tulsa Shock (became Dallas Wings in 2016)
-    "IND": "IND",   # Indiana Fever (consistent)
+
+# ── Injury Features ───────────────────────────────────────────────────────────
+
+REGULAR_MIN_THRESHOLD = 15.0  # min avg minutes to qualify as a regular rotation player
+MIN_GAMES_FOR_REGULAR = 5     # min games before per-player rolling avg is valid
+
+# ESPN status -> impact score (probability player is missing the game)
+INJURY_IMPACT = {
+    "Out":          1.00,
+    "Doubtful":     0.75,
+    "Questionable": 0.50,
+    "Day-To-Day":   0.25,
+    "Probable":     0.10,
 }
 
-def norm_team_abb(abb: str) -> str:
-    return TEAM_ABB_MAP.get(str(abb).upper().strip(), str(abb).upper().strip())
 
+def build_injury_features(injury_df: pd.DataFrame) -> dict[str, float]:
+    """
+    Convert injury report into per-team impact scores.
+
+    Returns a dict:
+      {
+        "ATL": {"players_out": 2, "impact_score": 1.75},
+        "BOS": {"players_out": 0, "impact_score": 0.0},
+        ...
+      }
+
+    Called during live prediction only. Historical training rows
+    default to 0 (we cannot retroactively know injury status).
+    """
+    if injury_df is None or injury_df.empty:
+        return {}
+
+    team_impacts = {}
+    for _, row in injury_df.iterrows():
+        team   = str(row.get("team", "")).strip().upper()
+        status = str(row.get("status", "")).strip()
+        impact = INJURY_IMPACT.get(status, 0.0)
+
+        if team not in team_impacts:
+            team_impacts[team] = {"players_out": 0, "impact_score": 0.0}
+
+        if status in ("Out", "Doubtful"):
+            team_impacts[team]["players_out"] += 1
+
+        team_impacts[team]["impact_score"] += impact
+
+    return team_impacts
+
+
+def get_injury_features_for_game(home_team: str, away_team: str,
+                                  injury_df: pd.DataFrame | None) -> dict:
+    """
+    Return injury feature dict for a single game matchup.
+    Safe to call with None injury_df — returns zeros.
+    """
+    zeros = {
+        "home_players_out":   0,
+        "away_players_out":   0,
+        "home_injury_impact": 0.0,
+        "away_injury_impact": 0.0,
+        "injury_impact_diff": 0.0,
+    }
+
+    if injury_df is None or injury_df.empty:
+        return zeros
+
+    impacts = build_injury_features(injury_df)
+
+    home_data = impacts.get(home_team, {"players_out": 0, "impact_score": 0.0})
+    away_data = impacts.get(away_team, {"players_out": 0, "impact_score": 0.0})
+
+    return {
+        "home_players_out":   home_data["players_out"],
+        "away_players_out":   away_data["players_out"],
+        "home_injury_impact": round(home_data["impact_score"], 3),
+        "away_injury_impact": round(away_data["impact_score"], 3),
+        "injury_impact_diff": round(
+            home_data["impact_score"] - away_data["impact_score"], 3
+        ),
+    }
+
+
+# ── Lineup / Injury Estimation ───────────────────────────────────────────────
+
+def _parse_minutes(mins) -> float:
+    """Convert NBA minutes string '23:45' or numeric to decimal minutes."""
+    if mins is None or (isinstance(mins, float) and np.isnan(mins)):
+        return 0.0
+    if isinstance(mins, (int, float)):
+        return float(mins)
+    try:
+        parts = str(mins).split(":")
+        return float(parts[0]) + float(parts[1]) / 60
+    except Exception:
+        return 0.0
+
+
+def build_lineup_injury_features(team_df: pd.DataFrame, player_df) -> pd.DataFrame:
+    """
+    Estimate lineup disruption from player box scores.
+
+    lineup_strength        = sum of each appearing player's shift(1) rolling-20 avg minutes
+                             (valid pre-game feature: uses prior stats, not current game)
+    lineup_strength_avg10  = shift(1) rolling-10 mean of lineup_strength (healthy baseline)
+    estimated_injury_impact = (baseline - actual) / baseline, clamped [0, 1]
+
+    No lookahead: MIN_ROLL20 uses shift(1); lineup_strength_avg10 uses shift(1) on top.
+    Using actual game-day lineup is valid — rosters are announced before tip-off.
+    """
+    team_df = team_df.copy()
+
+    if player_df is None or (hasattr(player_df, "empty") and player_df.empty):
+        team_df["lineup_strength"] = np.nan
+        team_df["lineup_strength_avg10"] = np.nan
+        team_df["estimated_injury_impact"] = 0.0
+        return team_df
+
+    pdf = player_df.copy()
+    pdf.columns = pdf.columns.str.upper()
+
+    if "GAME_DATE" in pdf.columns:
+        pdf["GAME_DATE"] = pd.to_datetime(pdf["GAME_DATE"])
+
+    if "MIN" not in pdf.columns:
+        team_df["lineup_strength"] = np.nan
+        team_df["lineup_strength_avg10"] = np.nan
+        team_df["estimated_injury_impact"] = 0.0
+        return team_df
+
+    pdf["MIN_FLOAT"] = pdf["MIN"].apply(_parse_minutes)
+    pdf = pdf[pdf["MIN_FLOAT"] > 0].copy()
+
+    if pdf.empty:
+        team_df["lineup_strength"] = np.nan
+        team_df["lineup_strength_avg10"] = np.nan
+        team_df["estimated_injury_impact"] = 0.0
+        return team_df
+
+    pdf = pdf.sort_values(["PLAYER_ID", "GAME_DATE"]).reset_index(drop=True)
+
+    # Per-player rolling-20 avg minutes before this game (shift(1) = no current game).
+    # min_periods=1 so any prior game is used — avoids treating players with 1-4 games
+    # of history as 0-minute contributors (which depresses lineup_strength early in season).
+    pdf["MIN_ROLL20"] = (
+        pdf.groupby("PLAYER_ID")["MIN_FLOAT"]
+        .transform(lambda x: x.shift(1).rolling(20, min_periods=1).mean())
+    )
+    pdf["MIN_ROLL20"] = pdf["MIN_ROLL20"].fillna(0)
+
+    # lineup_strength = sum of each player's prior avg minutes for everyone in today's box score
+    lineup = (
+        pdf.groupby(["TEAM_ABBREVIATION", "GAME_ID"])["MIN_ROLL20"]
+        .sum()
+        .reset_index()
+        .rename(columns={"MIN_ROLL20": "lineup_strength"})
+    )
+
+    team_df = team_df.merge(lineup, on=["TEAM_ABBREVIATION", "GAME_ID"], how="left")
+    team_df = team_df.sort_values(["TEAM_ABBREVIATION", "GAME_DATE"])
+
+    # Baseline: shift(1) rolling-10 of lineup_strength — G uses G-1..G-10 only
+    team_df["lineup_strength_avg10"] = (
+        team_df.groupby("TEAM_ABBREVIATION")["lineup_strength"]
+        .transform(lambda x: x.shift(1).rolling(10, min_periods=3).mean())
+    )
+
+    avg = team_df["lineup_strength_avg10"]
+    strength = team_df["lineup_strength"]
+    team_df["estimated_injury_impact"] = (
+        ((avg - strength) / avg.replace(0, np.nan))
+        .clip(0, 1)
+        .fillna(0.0)
+    )
+
+    log.info("Lineup injury features added: lineup_strength, lineup_strength_avg10, estimated_injury_impact")
+    return team_df
+
+
+def build_team_strength_features(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    team_strength_adj = PLUS_MINUS_roll10 - 3.0 * estimated_injury_impact
+
+    ~3-point swing per unit of injury impact (losing a 30-min starter moves spread ~3 pts).
+    """
+    df = df.copy()
+    pm = df["PLUS_MINUS_roll10"].fillna(0.0) if "PLUS_MINUS_roll10" in df.columns else pd.Series(0.0, index=df.index)
+    inj = df["estimated_injury_impact"].fillna(0.0) if "estimated_injury_impact" in df.columns else pd.Series(0.0, index=df.index)
+    df["team_strength_adj"] = pm - 3.0 * inj
+    log.info("Team strength features added: team_strength_adj")
+    return df
+
+
+# ── Data Cleaning ────────────────────────────────────────────────────────────
 
 def clean_gamelogs(raw: pd.DataFrame) -> pd.DataFrame:
     df = raw.copy()
     df.columns = [c.upper() for c in df.columns]
-
-    if "TEAM_ABBREVIATION" in df.columns:
-        df["TEAM_ABBREVIATION"] = df["TEAM_ABBREVIATION"].apply(norm_team_abb)
 
     numeric_cols = ["PTS","FGM","FGA","FG3M","FG3A","FTM","FTA",
                     "OREB","DREB","REB","AST","TOV","STL","BLK","BLKA",
@@ -159,7 +358,7 @@ def build_team_rolling_features(df: pd.DataFrame, elo: EloSystem = None) -> pd.D
                 result[f"{side}_WIN_RATE_roll10"] = result.groupby("TEAM_ABBREVIATION")[
                     f"{side}_WIN_RATE_roll10"].transform(lambda x: x.ffill().fillna(0.5))
 
-    # ── 7. NEW: Opponent-adjusted plus/minus ─────────────────────────────────
+    # ── 7. Opponent-adjusted plus/minus ─────────────────────────────────
     # For each game, get opponent's recent form (how strong is opponent?)
     if elo is not None and "GAME_ID" in result.columns and "MATCHUP" in result.columns:
         # Add opponent Elo for each row
@@ -175,7 +374,7 @@ def build_team_rolling_features(df: pd.DataFrame, elo: EloSystem = None) -> pd.D
                     opp = parts[-1].strip().split()[0] if parts[0].strip().split()[0] == team else parts[0].strip().split()[0]
                 else:
                     return 1500.0
-                return elo.get_rating(norm_team_abb(opp))
+                return elo.get_rating(opp)
             except:
                 return 1500.0
 
@@ -193,13 +392,13 @@ def build_team_rolling_features(df: pd.DataFrame, elo: EloSystem = None) -> pd.D
         )
         log.info("Added opponent-adjusted features")
 
-    # ── 8. NEW: Head-to-head rolling record ───────────────────────────────────
+    # ── 8. Head-to-head rolling record ───────────────────────────────────
     if "GAME_ID" in result.columns and "MATCHUP" in result.columns and "WIN" in result.columns:
         # Build H2H lookup: for each (team, opponent) pair, win rate last 10 games
         result["OPP_FROM_MATCHUP"] = result["MATCHUP"].apply(
             lambda m: m.split("vs.")[-1].strip().split()[0] if "vs." in str(m)
                       else (m.split("@")[-1].strip().split()[0] if "@" in str(m) else "")
-        ).apply(norm_team_abb)
+        )
 
         h2h_rates = []
         for idx, row in result.iterrows():
@@ -224,41 +423,44 @@ def build_team_rolling_features(df: pd.DataFrame, elo: EloSystem = None) -> pd.D
     return result
 
 
-def build_elo_ratings(df: pd.DataFrame) -> EloSystem:
+# ── Elo Rating ───────────────────────────────────────────────────────────────
+
+def build_elo_ratings(df: pd.DataFrame) -> pd.DataFrame:
     elo = EloSystem()
-    if "GAME_ID" not in df.columns or "MATCHUP" not in df.columns:
-        log.warning("Cannot build Elo — missing columns")
-        return elo
+    df = df.sort_values("GAME_DATE").copy()
+    
+    # Build paired games
+    elo_pre_map = {}  # (game_id, team) -> elo_pre
+    
+    for gid, grp in df.groupby("GAME_ID"):
+        if len(grp) != 2:
+            continue
+        home = grp[grp["MATCHUP"].str.contains(r"vs\.", na=False)]
+        away = grp[~grp["MATCHUP"].str.contains(r"vs\.", na=False)]
+        if len(home) != 1 or len(away) != 1:
+            continue
+            
+        ht = home["TEAM_ABBREVIATION"].iloc[0]
+        at = away["TEAM_ABBREVIATION"].iloc[0]
+        
+        # Store PRE-game ratings for both teams
+        elo_pre_map[(gid, ht)] = elo.get_rating(ht)
+        elo_pre_map[(gid, at)] = elo.get_rating(at)
+        
+        # Update both simultaneously
+        home_win = 1 if home["WL"].iloc[0] == "W" else 0
+        season = str(grp["SEASON"].iloc[0])
+        date = str(grp["GAME_DATE"].iloc[0])
+        elo.update(ht, at, home_win, season=season, game_date=date)
+    
+    # Map back to DataFrame
+    df["ELO_PRE"] = df.apply(
+        lambda r: elo_pre_map.get((r["GAME_ID"], r["TEAM_ABBREVIATION"]), 1500.0), axis=1
+    )
+    return df
 
-    games = df.sort_values("GAME_DATE").copy()
-    home_rows = []
-    for gid, grp in games.groupby("GAME_ID"):
-        if len(grp) != 2: continue
-        grp = grp.reset_index(drop=True)
-        home_mask = grp["MATCHUP"].str.contains(r"vs\.", na=False)
-        home = grp[home_mask]; away = grp[~home_mask]
-        if len(home) == 1 and len(away) == 1 and "WL" in grp.columns:
-            season = str(pd.to_datetime(grp["GAME_DATE"].iloc[0]).year)
-            home_rows.append({
-                "GAME_DATE": grp["GAME_DATE"].iloc[0],
-                "SEASON":    grp.get("SEASON", pd.Series([season])).iloc[0],
-                "HOME_TEAM": home["TEAM_ABBREVIATION"].iloc[0],
-                "AWAY_TEAM": away["TEAM_ABBREVIATION"].iloc[0],
-                "HOME_WIN":  1 if home["WL"].iloc[0] == "W" else 0,
-            })
 
-    if not home_rows:
-        log.warning("Elo: no valid game pairs found")
-        return elo
-
-    paired = pd.DataFrame(home_rows).sort_values("GAME_DATE")
-    for _, row in paired.iterrows():
-        elo.update(row["HOME_TEAM"], row["AWAY_TEAM"], int(row["HOME_WIN"]),
-                   season=str(row["SEASON"]), game_date=str(row["GAME_DATE"]))
-
-    log.info(f"Elo ratings computed: {len(elo.ratings)} teams")
-    return elo
-
+# ── Game-Level Feature Matrix ─────────────────────────────────────────────────
 
 def build_game_features(df: pd.DataFrame) -> pd.DataFrame:
     if "GAME_ID" not in df.columns or "MATCHUP" not in df.columns:
@@ -279,6 +481,21 @@ def build_game_features(df: pd.DataFrame) -> pd.DataFrame:
 
     if "HOME_WL" in merged.columns:
         merged["HOME_WIN"] = (merged["HOME_WL"] == "W").astype(int)
+
+    # Compute DIFF columns so they exist in the saved parquet
+    diff_base = [
+        "PTS_roll10","PTS_ewm","WIN_RATE_roll10","WIN_RATE_ewm",
+        "MOV_roll10","MOV_ewm","eFG_PCT_roll10","eFG_PCT_ewm",
+        "TS_PCT_roll10","TS_PCT_ewm","OFF_RTG_roll10","OFF_RTG_ewm",
+        "DAYS_REST","WIN_STREAK","ELO_PRE","SEASON_PCT",
+        "FT_RATE_roll10","FT_RATE_ewm","AST_TOV_roll10","AST_TOV_ewm",
+        "WIN_RATE_roll5","WIN_RATE_roll20","PACE_roll10","PACE_ewm",
+        "ADJ_MOV_roll10","ADJ_MOV_ewm","SOS_roll5","H2H_WIN_RATE",
+    ]
+    for base in diff_base:
+        h = f"HOME_{base}"; a = f"AWAY_{base}"
+        if h in merged.columns and a in merged.columns:
+            merged[f"DIFF_{base}"] = merged[h] - merged[a]
 
     log.info(f"Game feature matrix: {len(merged):,} games, {len(merged.columns)} columns")
     return merged
@@ -336,3 +553,43 @@ def get_feature_columns(df: pd.DataFrame) -> list:
             feat_cols.append(d)
 
     return feat_cols
+
+# ── Full Pipeline ─────────────────────────────────────────────────────────────
+
+def run_feature_pipeline(raw_df: pd.DataFrame | None = None,
+                          player_df: pd.DataFrame | None = None) -> pd.DataFrame:
+    """
+    Full feature engineering pipeline:
+      raw game logs → cleaned → rolling features → Elo → lineup/strength → game matrix
+    """
+    if raw_df is None:
+        raw_path = RAW_DIR / "all_game_logs.parquet"
+        if not raw_path.exists():
+            raise FileNotFoundError(f"Raw data not found at {raw_path}. Run --fetch first.")
+        raw_df = pd.read_parquet(raw_path)
+        log.info(f"Loaded raw data: {raw_df.shape}")
+
+    if player_df is None:
+        player_path = RAW_DIR / "all_player_game_logs.parquet"
+        if player_path.exists():
+            player_df = pd.read_parquet(player_path)
+            log.info(f"Loaded player data: {player_df.shape}")
+
+    df = clean_gamelogs(raw_df)
+    df = build_team_rolling_features(df)
+    df = build_elo_ratings(df)
+    df = build_lineup_injury_features(df, player_df)
+    df = build_team_strength_features(df)
+    game_df = build_game_features(df)
+
+    out_path = PROC_DIR / "game_features.parquet"
+    game_df.to_parquet(out_path, index=False)
+    log.info(f"Feature matrix saved: {out_path}")
+    return game_df
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    df = run_feature_pipeline()
+    print(df.shape)
+    print(df.dtypes.value_counts())

@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//c/Users/ahmed/**)",
+      "PowerShell($py = \"C:\\\\Users\\\\ahmed\\\\Desktop\\\\Freelance Gigs\\\\TJ\\\\WNBA Moneyline Model\\\\wnba_model\\\\Scripts\\\\python.exe\"; & $py -c \"import pandas as pd; df = pd.read_parquet\\('data/processed/game_features.parquet'\\); print\\('SEASON dtype:', df['SEASON'].dtype\\); print\\('Unique seasons:', sorted\\(df['SEASON'].unique\\(\\)\\)\\)\" 2>&1)"
+    ]
+  }
+}

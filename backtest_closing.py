@@ -44,7 +44,6 @@ def norm(a): return ABB_MAP.get(str(a).upper().strip(), str(a).upper().strip())
 def load_predictions(season: str) -> pd.DataFrame:
     from src.model import WNBAEnsemble
     from src.elo import EloSystem
-    from config.settings import CACHE_DIR
 
     model     = WNBAEnsemble().load()
     features  = pd.read_parquet(PROC_DIR / "game_features.parquet")
@@ -54,14 +53,14 @@ def load_predictions(season: str) -> pd.DataFrame:
 
     X         = season_df[model.feat_cols].fillna(0).values
     elo       = EloSystem()
-    if (CACHE_DIR / "wnba_elo_state.json").exists():
-        elo.load()
+    elo.load()
     elo_probs = season_df.apply(
         lambda r: elo.win_probability(
             r.get("HOME_TEAM_ABBREVIATION",""), r.get("AWAY_TEAM_ABBREVIATION","")
         ), axis=1).values
 
-    probs               = model.predict_proba(X, elo_probs)
+    comps               = model.predict_proba_components(X, elo_probs)
+    probs               = model.blend(comps)
     preds               = season_df[["GAME_ID","GAME_DATE","SEASON",
                                      "HOME_TEAM_ABBREVIATION","AWAY_TEAM_ABBREVIATION",
                                      "HOME_WIN"]].copy()
@@ -194,7 +193,7 @@ def print_comparison(all_season_results, seasons, min_edge):
     for season, results in zip(seasons, all_season_results):
         if not results:
             continue
-        label = "✅ CLEAN" if int(season) >= 2024 else "🔵 VALID" if int(season) == 2023 else "⚠️ TRAIN"
+        label = "[CLEAN]" if int(season) >= 2024 else "[VALID]" if int(season) == 2023 else "[TRAIN]"
         print(f"\n  {season} [{label}]")
         print(f"  {'Book':20} {'Matched':8} {'Bets':6} {'Win%':8} {'BE%':8} {'ROI':10} {'P&L':8}")
         print(f"  {'-'*68}")
@@ -204,7 +203,7 @@ def print_comparison(all_season_results, seasons, min_edge):
                 continue
             s = results[book_key]
             print(f"  {book_name:20} {s['matched']:8d} {s['bets']:6d} "
-                  f"{s['wr']:7.1%}  {s['be']:6.1%}  {s['roi']:+8.1f}%  {s['pnl']:+6.2f}u")
+                  f"{s['wr']:7.1%}  {s['be']:6.1f}%  {s['roi']:+8.1f}%  {s['pnl']:+6.2f}u")
 
     # Combined clean seasons
     clean_seasons = [r for r, s in zip(all_season_results, seasons) if int(s) >= 2024]
@@ -227,7 +226,7 @@ def print_comparison(all_season_results, seasons, min_edge):
             roi = combined_pnl / combined_bets * 100
             avg_be = sum(be_vals)/len(be_vals)
             print(f"  {book_name:20} {combined_bets:6d} "
-                  f"{combined_wins/combined_bets:7.1%}  {avg_be:6.1%}  "
+                  f"{combined_wins/combined_bets:7.1%}  {avg_be:6.1f}%  "
                   f"{roi:+8.1f}%  {combined_pnl:+6.2f}u")
     print(f"\n{'='*75}")
 
