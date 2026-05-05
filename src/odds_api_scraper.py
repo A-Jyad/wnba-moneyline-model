@@ -51,19 +51,27 @@ WNBA_SEASON_DATES = {
 }
 
 NAME_TO_ABB = {
-    "atlanta dream":          "ATL",
-    "chicago sky":            "CHI",
-    "connecticut sun":        "CON",
-    "dallas wings":           "DAL",
-    "indiana fever":          "IND",
-    "las vegas aces":         "LAS",
-    "los angeles sparks":     "LA",
-    "minnesota lynx":         "MIN",
-    "new york liberty":       "NYL",
-    "phoenix mercury":        "PHO",
-    "seattle storm":          "SEA",
-    "washington mystics":     "WAS",
-    "golden state valkyries": "GSV",
+    'atlanta dream'          : 'ATL',
+    'chicago sky'            : 'CHI',
+    'connecticut sun'        : 'CON',
+    'dallas wings'           : 'DAL',
+    'golden state valkyries' : 'GSV',
+    'indiana fever'          : 'IND',
+    'las vegas aces'         : 'LVA',
+    'los angeles sparks'     : 'LAS',
+    'minnesota lynx'         : 'MIN',
+    'new York liberty'       : 'NYL',
+    'phoenix mercury'        : 'PHX',
+    'seattle storm'          : 'SEA',
+    'washington mystics'     : 'WAS',
+
+    # Relocated Teams
+    'san antonio stars'      : 'LVA',
+    'tulsa shock'            : 'DAL',
+
+    # New Teams 2026
+    'toronto tempo'          : 'TOR',
+    'portland fire'          : 'PDX'
 }
 
 def name_to_abb(name: str) -> str:
