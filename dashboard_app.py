@@ -51,6 +51,13 @@ def save_bets(bets):
     with open(TRACKER_FILE, "w") as f:
         json.dump(bets, f, indent=2, default=str)
 
+def find_bet(bets, date, home, away, bet_team):
+    for i, b in enumerate(bets):
+        if (b.get("date") == date and b.get("home_team") == home
+                and b.get("away_team") == away and b.get("bet_team") == bet_team):
+            return i
+    return -1
+
 # ── Backtest data ─────────────────────────────────────────────────────────────
 LOG_DIR = ROOT / "logs"
 
@@ -199,6 +206,78 @@ def apply_filters(df, min_edge, max_edge, min_odds, max_odds, underdogs_only, se
 
     return pd.DataFrame(results)
 
+def annotate_all_games(df, min_edge, max_edge, min_odds, max_odds, underdogs_only, seasons, away_only=True):
+    """Return all games in selected seasons with edge/bet columns appended."""
+    if df.empty:
+        return pd.DataFrame()
+    rows = df[df["season"].isin(seasons)].copy() if seasons else df.copy()
+    if rows.empty:
+        return pd.DataFrame()
+
+    if "home_odds" not in rows.columns and "moneyline_home" in rows.columns:
+        rows = rows.rename(columns={"moneyline_home": "home_odds", "moneyline_away": "away_odds"})
+    if "home_won" not in rows.columns and "home_actually_won" in rows.columns:
+        rows = rows.rename(columns={"home_actually_won": "home_won"})
+
+    records = []
+    for _, row in rows.iterrows():
+        try:
+            p_home = float(row.get("model_prob_home", 0))
+            ho     = float(row.get("home_odds", 0))
+            ao     = float(row.get("away_odds", 0))
+            hw     = float(row.get("home_won", np.nan))
+        except:
+            continue
+        if pd.isna(p_home) or pd.isna(ho) or pd.isna(ao) or pd.isna(hw):
+            continue
+
+        rh = implied_prob(ho); ra = implied_prob(ao)
+        fh, fa = remove_vig(rh, ra)
+        eh = (p_home - fh) * 100
+        ea = (1 - p_home - fa) * 100
+
+        # determine which side to bet (model's preferred side)
+        if eh >= ea:
+            pref_side, pref_edge, pref_odds, is_home = "HOME", eh, ho, True
+        else:
+            pref_side, pref_edge, pref_odds, is_home = "AWAY", ea, ao, False
+
+        qualifies = (
+            pref_edge >= min_edge
+            and pref_edge <= max_edge
+            and not (underdogs_only and pref_odds < 0)
+            and pref_odds <= max_odds
+            and not (abs(min_odds) > 0 and pref_odds > 0 and pref_odds <= abs(min_odds))
+            and not (away_only and is_home)
+        )
+
+        won = pnl = None
+        if qualifies:
+            won = bool(is_home == (hw == 1))
+            dec = american_to_decimal(pref_odds)
+            pnl = round((dec - 1) if won else -1.0, 4)
+
+        records.append({
+            "game_date":        row.get("game_date", ""),
+            "home_team":        row.get("home_team", ""),
+            "away_team":        row.get("away_team", ""),
+            "season":           row["season"],
+            "model_prob_home":  round(p_home, 4),
+            "home_odds":        ho,
+            "away_odds":        ao,
+            "home_edge_pct":    round(eh, 2),
+            "away_edge_pct":    round(ea, 2),
+            "pref_side":        pref_side,
+            "pref_edge_pct":    round(pref_edge, 2),
+            "home_won":         int(hw),
+            "qualifies":        qualifies,
+            "bet_odds":         pref_odds if qualifies else None,
+            "won":              won,
+            "pnl":              pnl,
+        })
+
+    return pd.DataFrame(records)
+
 def summarise(df):
     if df.empty: return {"bets":0,"roi":0,"wr":0,"pnl":0,"be":0}
     wins = df["won"].sum(); total = len(df); pnl = df["pnl"].sum()
@@ -329,6 +408,7 @@ if page == "🏀 Today's Predictions":
         # ── Flagged bets ──────────────────────────────────────────────────────
         if len(flagged) > 0:
             st.subheader("⭐ Flagged Bets")
+            _all_bets = load_bets()
             for _, row in flagged.iterrows():
                 rec      = str(row.get("recommendation",""))
                 bet_team = rec.split("BET ")[1].split(" ")[0] if "BET " in rec else "?"
@@ -340,6 +420,9 @@ if page == "🏀 Today's Predictions":
                 away     = row.get("away_team","?")
                 home_imp = float(row.get("home_injury_impact", 0) or 0)
                 away_imp = float(row.get("away_injury_impact", 0) or 0)
+
+                existing_idx   = find_bet(_all_bets, selected_date, home, away, bet_team)
+                already_logged = existing_idx >= 0
 
                 with st.container():
                     c1, c2, c3, c4 = st.columns([3,2,2,2])
@@ -357,14 +440,37 @@ if page == "🏀 Today's Predictions":
                     c2.metric("Edge", f"{edge_str}%")
                     c3.metric("EV", ev_str)
                     c4.metric("Kelly %", f"{kelly:.1f}%")
-                    if st.button(f"✅ Log bet — {bet_team}", key=f"log_{home}_{away}"):
-                        bets = load_bets()
-                        bets.append({"date": selected_date, "home_team": home, "away_team": away,
-                                     "bet_team": bet_team, "bet_odds": odds_str, "edge_pct": edge_str,
-                                     "result": "pending", "units": 1.0, "pnl": None})
-                        save_bets(bets)
-                        st.success("Logged!")
-                        st.rerun()
+
+                    lc1, lc2, lc3 = st.columns([2, 2, 2])
+                    with lc1:
+                        default_units = float(_all_bets[existing_idx].get("units", 1.0)) if already_logged else 1.0
+                        log_units = st.number_input(
+                            "Units to bet", min_value=0.1, max_value=100.0,
+                            value=default_units, step=0.5,
+                            key=f"units_{home}_{away}",
+                        )
+                    with lc2:
+                        if already_logged:
+                            st.success("✅ Logged")
+                            if st.button("🔄 Update units", key=f"upd_{home}_{away}"):
+                                _all_bets[existing_idx]["units"] = log_units
+                                save_bets(_all_bets)
+                                st.rerun()
+                        else:
+                            if st.button(f"✅ Log — {bet_team}", key=f"log_{home}_{away}", type="primary"):
+                                _all_bets.append({
+                                    "date": selected_date, "home_team": home, "away_team": away,
+                                    "bet_team": bet_team, "bet_odds": odds_str, "edge_pct": edge_str,
+                                    "result": "pending", "units": log_units, "pnl": None,
+                                })
+                                save_bets(_all_bets)
+                                st.rerun()
+                    with lc3:
+                        if already_logged:
+                            if st.button("🗑️ Unlog", key=f"unlog_{home}_{away}"):
+                                _all_bets.pop(existing_idx)
+                                save_bets(_all_bets)
+                                st.rerun()
                     st.divider()
 
         # ── All games ─────────────────────────────────────────────────────────
@@ -562,15 +668,15 @@ elif page == "🔬 Filter Playground":
     plot_data = [r for r in season_rows if r["ROI"] != "—"]
     if plot_data:
         seasons_p = [r["Season"] for r in plot_data]
-        rois_p    = [float(r["ROI"].replace("%","").replace("+","")) for r in plot_data]
+        pnls_p    = [float(r["P&L"].replace("u","").replace("+","")) for r in plot_data]
         colors    = ["#ff6b35" if s in CLEAN_SEASONS else "#888780" for s in seasons_p]
         fig = go.Figure(go.Bar(
-            x=seasons_p, y=rois_p,
-            marker_color=[c if r >= 0 else "#A32D2D" for c,r in zip(colors,rois_p)],
-            text=[f"{r:+.1f}%" for r in rois_p], textposition="outside",
+            x=seasons_p, y=pnls_p,
+            marker_color=[c if p >= 0 else "#A32D2D" for c,p in zip(colors,pnls_p)],
+            text=[f"{p:+.1f}u" for p in pnls_p], textposition="outside",
         ))
         fig.add_hline(y=0, line_dash="dot", line_color="gray")
-        fig.update_layout(title="ROI by season", height=300,
+        fig.update_layout(title="Total P&L by season (units)", height=300,
                           plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)")
         st.plotly_chart(fig, use_container_width=True)
 
@@ -581,6 +687,22 @@ elif page == "🔬 Filter Playground":
         st.info(f"🎯 **Clean out-of-sample only:** {clean_s['bets']} bets | "
                 f"WR {clean_s['wr']:.1f}% vs BE {clean_s['be']:.1f}% | "
                 f"ROI **{clean_s['roi']:+.1f}%**")
+
+    # Download all games (with bet qualification flag) as CSV
+    st.divider()
+    all_games_df = annotate_all_games(raw, min_edge, max_edge, min_odds_filter,
+                                      max_odds, underdogs_only, selected_seasons, away_only=away_only)
+    if not all_games_df.empty:
+        all_games_df = all_games_df.sort_values(
+            ["season", "game_date"] if "game_date" in all_games_df.columns else ["season"]
+        )
+    st.download_button(
+        label="⬇️ Download all games (CSV)",
+        data=all_games_df.to_csv(index=False),
+        file_name=f"wnba_all_games_{chosen_book_key}.csv",
+        mime="text/csv",
+        help="All games in the selected seasons — 'qualifies' column marks which ones pass your filters.",
+    )
 
     # Save button
     st.divider()
@@ -664,7 +786,7 @@ elif page == "📋 Bet Tracker":
         if len(pending):
             st.subheader(f"⏳ Pending ({len(pending)})")
             for i, (idx, row) in enumerate(pending.iterrows()):
-                c1,c2,c3 = st.columns([4,2,2])
+                c1,c2,c3,c4 = st.columns([4,2,2,1])
                 with c1:
                     st.write(f"**{row['bet_team']} ({row['bet_odds']})** — "
                              f"{row['home_team']} vs {row['away_team']} · "
@@ -686,6 +808,17 @@ elif page == "📋 Bet Tracker":
                                 break
                         save_bets(all_bets)
                         st.rerun()
+                with c4:
+                    if st.button("🗑️", key=f"del_{i}", help="Delete this bet"):
+                        all_bets = load_bets()
+                        all_bets = [b for b in all_bets if not (
+                            b.get("date") == row["date"].date().isoformat() and
+                            b.get("home_team") == row["home_team"] and
+                            b.get("away_team") == row["away_team"] and
+                            b.get("bet_team") == row["bet_team"]
+                        )]
+                        save_bets(all_bets)
+                        st.rerun()
             st.divider()
 
         display = df[["date","home_team","away_team","bet_team","bet_odds",
@@ -693,6 +826,37 @@ elif page == "📋 Bet Tracker":
         display["date"] = display["date"].dt.strftime("%b %d")
         display.columns = ["Date","Home","Away","Bet","Odds","Edge%","Units","Result","P&L"]
         st.dataframe(display, use_container_width=True, hide_index=True)
+
+        st.divider()
+        dl_bets = df[["date","home_team","away_team","bet_team","bet_odds",
+                       "edge_pct","units","result","pnl"]].copy()
+        dl_bets["date"] = dl_bets["date"].dt.strftime("%Y-%m-%d")
+        st.download_button(
+            label="⬇️ Download bet log (CSV)",
+            data=dl_bets.to_csv(index=False),
+            file_name="wnba_bet_log.csv",
+            mime="text/csv",
+        )
+
+        with st.expander("🗑️ Delete a bet"):
+            labels = [
+                f"{row['date'].strftime('%b %d')} — {row['bet_team']} ({row['bet_odds']}) "
+                f"{row['home_team']} vs {row['away_team']} [{row['result']}]"
+                for _, row in df.iterrows()
+            ]
+            to_delete = st.selectbox("Select bet to delete", labels, key="del_select")
+            if st.button("Delete selected bet", type="primary", key="del_confirmed"):
+                del_idx = labels.index(to_delete)
+                del_row = df.iloc[del_idx]
+                all_bets = load_bets()
+                all_bets = [b for b in all_bets if not (
+                    b.get("date") == del_row["date"].date().isoformat() and
+                    b.get("home_team") == del_row["home_team"] and
+                    b.get("away_team") == del_row["away_team"] and
+                    b.get("bet_team") == del_row["bet_team"]
+                )]
+                save_bets(all_bets)
+                st.rerun()
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE 4: PERFORMANCE
