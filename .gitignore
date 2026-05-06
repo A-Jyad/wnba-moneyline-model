@@ -26,7 +26,12 @@ Thumbs.db
 backtest_multi.py
 backtest_closing.py
 backtest_real_odds.py
+experiment_model.py
 *.ipynb
 
 # Plots
 *.png
+
+# Claude
+CLAUDE.md
+.claude/
