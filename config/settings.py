@@ -54,18 +54,21 @@ RANDOM_SEED      = 42
 # Logistic Regression
 LR_PARAMS = {"C": 0.1, "max_iter": 1000, "random_state": RANDOM_SEED}
 
-# XGBoost
+# XGBoost — tuned 150 Optuna trials (2026-05-06)
 XGB_PARAMS = {
-    "n_estimators": 400, "max_depth": 4, "learning_rate": 0.03,
-    "subsample": 0.8, "colsample_bytree": 0.8,
-    "use_label_encoder": False, "eval_metric": "logloss",
-    "random_state": RANDOM_SEED, "n_jobs": -1,
+    "n_estimators": 420, "max_depth": 2, "learning_rate": 0.012689963970428347,
+    "subsample": 0.5200124713778093, "colsample_bytree": 0.4787843586012409,
+    "min_child_weight": 11, "reg_alpha": 0.010210643059632651,
+    "reg_lambda": 0.012055221510750417,
+    "eval_metric": "logloss", "random_state": RANDOM_SEED, "n_jobs": -1,
 }
 
-# LightGBM
+# LightGBM — tuned 150 Optuna trials (2026-05-06)
 LGB_PARAMS = {
-    "n_estimators": 400, "max_depth": 4, "learning_rate": 0.03,
-    "subsample": 0.8, "colsample_bytree": 0.8,
+    "n_estimators": 504, "max_depth": 2, "learning_rate": 0.04048453066116998,
+    "subsample": 0.97691511499413, "colsample_bytree": 0.5359101510033306,
+    "min_child_samples": 41, "reg_alpha": 0.0005417857894104932,
+    "reg_lambda": 0.003731304786469815,
     "random_state": RANDOM_SEED, "n_jobs": -1, "verbose": -1,
 }
 
@@ -96,11 +99,12 @@ VIG_REMOVE_METHOD= "multiplicative"  # "additive" or "multiplicative"
 # Optimizer result: 72 bets, 50% WR, +16.2% ROI on clean seasons
 # ~36 bets/season (~1-2 per week during May-October)
 MIN_EDGE_PCT       = 15.0
-BET_UNDERDOGS_ONLY = False  # No underdog filter
-BET_AWAY_ONLY      = True
-BET_MAX_ODDS       = 325
-BET_MIN_ODDS       = 120
 BET_MAX_EDGE       = 60.0
+BET_MIN_ODDS       = 120
+BET_MAX_ODDS       = 325
+BET_UNDERDOGS_ONLY = True  
+BET_AWAY_ONLY      = False
+
 KELLY_FRACTION     = 0.25
 MAX_BET_PCT        = 3.0
 MIN_BET_UNITS      = 0.5

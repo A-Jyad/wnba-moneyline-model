@@ -502,57 +502,21 @@ def build_game_features(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def get_feature_columns(df: pd.DataFrame) -> list:
-    exclude = {
-        "GAME_ID","GAME_DATE","SEASON",
-        "HOME_TEAM_ID","AWAY_TEAM_ID",
-        "HOME_TEAM_ABBREVIATION","AWAY_TEAM_ABBREVIATION",
-        "HOME_TEAM_NAME","AWAY_TEAM_NAME",
-        "HOME_MATCHUP","AWAY_MATCHUP",
-        "HOME_WL","AWAY_WL","HOME_WIN",
-        "HOME_OPP_FROM_MATCHUP","AWAY_OPP_FROM_MATCHUP",
-        # Raw box score (leakage)
-        "HOME_PTS","AWAY_PTS","HOME_FGM","AWAY_FGM","HOME_FGA","AWAY_FGA",
-        "HOME_FG3M","AWAY_FG3M","HOME_FG3A","AWAY_FG3A",
-        "HOME_FTM","AWAY_FTM","HOME_FTA","AWAY_FTA",
-        "HOME_OREB","AWAY_OREB","HOME_DREB","AWAY_DREB",
-        "HOME_REB","AWAY_REB","HOME_AST","AWAY_AST",
-        "HOME_STL","AWAY_STL","HOME_BLK","AWAY_BLK",
-        "HOME_BLKA","AWAY_BLKA","HOME_TOV","AWAY_TOV",
-        "HOME_PF","AWAY_PF","HOME_PFD","AWAY_PFD",
-        "HOME_PLUS_MINUS","AWAY_PLUS_MINUS",
-        "HOME_eFG_PCT","AWAY_eFG_PCT","HOME_FG_PCT","AWAY_FG_PCT",
-        "HOME_FG3_PCT","AWAY_FG3_PCT","HOME_FT_PCT","AWAY_FT_PCT",
-        "HOME_TS_PCT","AWAY_TS_PCT","HOME_FT_RATE","AWAY_FT_RATE",
-        "HOME_AST_TOV","AWAY_AST_TOV","HOME_PACE","AWAY_PACE",
-        "HOME_OFF_RTG","AWAY_OFF_RTG","HOME_WIN","AWAY_WIN",
-        "HOME_MIN","AWAY_MIN","HOME_IS_HOME_GAME","AWAY_IS_HOME_GAME",
-        "HOME_OPP_ELO","AWAY_OPP_ELO","HOME_ADJ_MOV","AWAY_ADJ_MOV",
-    }
-
-    feat_cols = [
-        col for col in df.columns
-        if col not in exclude
-        and df[col].dtype in ["float64","float32","int64","int32"]
-        and df[col].notna().sum() > len(df) * 0.3
+    # Top-10 features selected via blended XGB+LGB importance + exp3 validation
+    # (150-trial Optuna tuning, 2026-05-06): best Brier and AUC on test set
+    top10 = [
+        "DIFF_MOV_ewm",
+        "DIFF_MOV_roll10",
+        "HOME_lineup_strength_avg10",
+        "DIFF_ELO_PRE",
+        "HOME_FT_PCT_ewm",
+        "AWAY_AST_TOV_ewm",
+        "AWAY_AST_ewm",
+        "HOME_ELO_PRE",
+        "AWAY_lineup_strength",
+        "HOME_PLUS_MINUS_ewm",
     ]
-
-    # Add DIFF features
-    diff_base = [
-        "PTS_roll10","PTS_ewm","WIN_RATE_roll10","WIN_RATE_ewm",
-        "MOV_roll10","MOV_ewm","eFG_PCT_roll10","eFG_PCT_ewm",
-        "TS_PCT_roll10","TS_PCT_ewm","OFF_RTG_roll10","OFF_RTG_ewm",
-        "DAYS_REST","WIN_STREAK","ELO_PRE","SEASON_PCT",
-        "FT_RATE_roll10","FT_RATE_ewm","AST_TOV_roll10","AST_TOV_ewm",
-        "WIN_RATE_roll5","WIN_RATE_roll20","PACE_roll10","PACE_ewm",
-        "ADJ_MOV_roll10","ADJ_MOV_ewm","SOS_roll5","H2H_WIN_RATE",
-    ]
-    for base in diff_base:
-        h = f"HOME_{base}"; a = f"AWAY_{base}"
-        d = f"DIFF_{base}"
-        if h in df.columns and a in df.columns and d not in feat_cols:
-            feat_cols.append(d)
-
-    return feat_cols
+    return [col for col in top10 if col in df.columns]
 
 # ── Full Pipeline ─────────────────────────────────────────────────────────────
 

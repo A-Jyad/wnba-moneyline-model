@@ -1,0 +1,5 @@
+game_id,date,home_team,away_team,p_home_win,p_away_win,elo_home,elo_away,elo_diff,home_b2b,away_b2b,home_streak,away_streak,home_injuries,away_injuries,home_players_out,away_players_out,home_injury_impact,away_injury_impact,injury_impact_diff,home_ml,away_ml,edge_home_pct,edge_away_pct,has_edge,kelly_units,recommendation
+1022600004,2026-05-09,IND,DAL,0.4301,0.5699,1522.2,1334.8,187.5,False,False,-3,-1,None,None,0,0,0.0,0.0,0.0,-360.0,217.0,-28.26,28.26,True,3.0,BET DAL (+217) | Edge: 28.3% | Units: 3.00 | EV: +0.807
+1022600005,2026-05-09,LVA,PHX,0.4198,0.5802,1655.5,1535.3,120.3,False,False,-3,1,None,None,0,0,0.0,0.0,0.0,-339.0,213.0,-28.76,28.76,True,3.0,BET PHX (+213) | Edge: 28.8% | Units: 3.00 | EV: +0.816
+1022600006,2026-05-09,PDX,CHI,0.5,0.5,1500.0,1336.0,164.0,False,False,0,1,None,None,0,0,0.0,0.0,0.0,,,,,False,0.0,No odds available — model only
+1022600010,2026-05-09,MIN,ATL,0.1969,0.8031,1648.7,1596.8,52.0,False,False,3,-2,None,None,0,0,0.0,0.0,0.0,,,,,False,0.0,No odds available — model only

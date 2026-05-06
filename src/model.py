@@ -91,14 +91,19 @@ def split_data(df: pd.DataFrame, feat_cols: list[str]):
 
 
 def _calibrate(estimator, X_valid, y_valid, method="sigmoid"):
+    import warnings
     try:
         from sklearn.calibration import CalibratedClassifierCV
         cal = CalibratedClassifierCV(estimator, cv="prefit", method=method)
-        cal.fit(X_valid, y_valid)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            cal.fit(X_valid, y_valid)
         return cal
     except Exception:
         from sklearn.isotonic import IsotonicRegression
-        raw_p = estimator.predict_proba(X_valid)[:, 1]
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            raw_p = estimator.predict_proba(X_valid)[:, 1]
         if method == "isotonic":
             ir = IsotonicRegression(out_of_bounds="clip")
             ir.fit(raw_p.reshape(-1, 1), y_valid)

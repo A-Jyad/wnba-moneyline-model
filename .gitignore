@@ -24,5 +24,9 @@ Thumbs.db
 
 # Backtesting
 backtest_multi.py
+backtest_closing.py
 backtest_real_odds.py
 *.ipynb
+
+# Plots
+*.png
