@@ -50,6 +50,36 @@ def _check_password():
 
 _check_password()
 
+# ── Global styles ─────────────────────────────────────────────────────────────
+st.markdown("""
+<style>
+/* Tighten top padding */
+.block-container { padding-top: 1.2rem !important; }
+
+/* Game cards */
+.game-card {
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.07);
+    border-radius: 12px;
+    padding: 16px 20px 13px;
+    margin-bottom: 6px;
+}
+
+/* Flagged bet cards */
+.bet-card {
+    background: linear-gradient(135deg, rgba(0,200,150,0.08) 0%, rgba(0,200,150,0.02) 100%);
+    border: 1px solid rgba(0,200,150,0.28);
+    border-left: 4px solid #00c896;
+    border-radius: 12px;
+    padding: 18px 22px 15px;
+    margin-bottom: 6px;
+}
+
+/* Subtle divider replacement */
+hr { border-color: rgba(255,255,255,0.06) !important; }
+</style>
+""", unsafe_allow_html=True)
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 def american_to_decimal(ml):
     try:
@@ -569,15 +599,29 @@ if page == "🏀 Today's Predictions":
                 existing_idx   = find_bet(_all_bets, selected_date, home, away, bet_team)
                 already_logged = existing_idx >= 0
 
-                with st.container():
-                    c1, c2, c3, c4 = st.columns([3,2,2,2])
-                    with c1:
-                        st.markdown(f"### {home} vs {away}")
-                        st.markdown(f"**🎯 BET {bet_team} ({odds_str})**")
-                    c2.metric("Edge", f"{edge_str}%")
-                    c3.metric("EV", ev_str)
-                    c4.metric("Kelly %", f"{kelly:.1f}%")
+                _gt_bet  = _game_time_myt(home, away)
+                _elo_bet = float(row.get("elo_diff", 0) or 0)
+                _sub     = " · ".join(filter(None, [_gt_bet, f"{home} vs {away}"]))
+                st.markdown(f"""<div class="bet-card">
+  <div style="display:flex;justify-content:space-between;align-items:flex-start">
+    <div>
+      <div style="color:#777;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px">{_sub}</div>
+      <div style="font-size:22px;font-weight:800;color:#00c896">🎯 BET {bet_team}</div>
+      <div style="font-size:20px;font-weight:700;color:#eee;margin-top:3px">{odds_str}</div>
+    </div>
+    <div style="text-align:right">
+      <div style="font-size:34px;font-weight:900;color:#00c896;line-height:1">{edge_str}%</div>
+      <div style="font-size:10px;font-weight:700;color:#00c896;letter-spacing:1px;text-transform:uppercase">EDGE</div>
+    </div>
+  </div>
+  <div style="display:flex;gap:24px;margin-top:14px;padding-top:12px;border-top:1px solid rgba(0,200,150,0.15)">
+    <div><div style="color:#666;font-size:10px;text-transform:uppercase;letter-spacing:.5px">EV</div><div style="font-weight:700;font-size:15px;color:#eee">{ev_str}</div></div>
+    <div><div style="color:#666;font-size:10px;text-transform:uppercase;letter-spacing:.5px">Kelly</div><div style="font-weight:700;font-size:15px;color:#eee">{kelly:.1f}%</div></div>
+    <div><div style="color:#666;font-size:10px;text-transform:uppercase;letter-spacing:.5px">Elo diff</div><div style="font-weight:700;font-size:15px;color:#eee">{_elo_bet:+.0f}</div></div>
+  </div>
+</div>""", unsafe_allow_html=True)
 
+                with st.container():
                     lc1, lc2, lc3 = st.columns([2, 2, 2])
                     with lc1:
                         default_units = float(_all_bets[existing_idx].get("units", 1.0)) if already_logged else 1.0
@@ -630,49 +674,66 @@ if page == "🏀 Today's Predictions":
             pinn_h = pinn.get("home") if pinn else row.get("home_ml")
             pinn_a = pinn.get("away") if pinn else row.get("away_ml")
 
-            c1, c2, c3 = st.columns([2, 4, 3])
-            with c1:
-                st.markdown(f"**{home}{b2b_h}** vs {away}{b2b_a}")
-                _gt = _game_time_myt(home, away)
-                st.caption(f"{_gt}  ·  Elo: {elo:+.0f}" if _gt else f"Elo: {elo:+.0f}")
-            with c2:
-                bar = "█"*int(p_home*20) + "░"*(20-int(p_home*20))
-                st.markdown(f"`{bar}` {p_home*100:.0f}% / {(1-p_home)*100:.0f}%")
-                if is_bet:
-                    st.markdown(f"<span style='color:#3ddc84;font-weight:600'>⭐ {rec}</span>",
-                                unsafe_allow_html=True)
-                elif "NO BET" in rec:
-                    st.markdown(f"<span style='color:#ff4b4b'>✗ {rec}</span>",
-                                unsafe_allow_html=True)
-                else:
-                    st.caption(rec)
-            with c3:
-                try:
-                    if pinn_h is not None and pinn_a is not None:
-                        h_str = fmt_ml(pinn_h); a_str = fmt_ml(pinn_a)
-                        if edge_h is not None and str(edge_h) != "nan":
-                            eh = float(edge_h); ea = float(edge_a)
-                            hc = "#3ddc84" if eh > 0 else "#ff4b4b"
-                            ac = "#3ddc84" if ea > 0 else "#ff4b4b"
-                            st.markdown(
-                                f"<div style='font-size:13px;line-height:1.8'>"
-                                f"<span style='color:#aaa;font-size:11px'>Pinnacle</span><br>"
-                                f"<span style='color:#aaa'>{home}:</span> <b>{h_str}</b> "
-                                f"<span style='color:{hc}'>({eh:+.1f}%)</span><br>"
-                                f"<span style='color:#aaa'>{away}:</span> <b>{a_str}</b> "
-                                f"<span style='color:{ac}'>({ea:+.1f}%)</span></div>",
-                                unsafe_allow_html=True)
-                        else:
-                            st.markdown(
-                                f"<div style='font-size:13px;line-height:1.8'>"
-                                f"<span style='color:#aaa;font-size:11px'>Pinnacle</span><br>"
-                                f"<span style='color:#aaa'>{home}:</span> <b>{h_str}</b><br>"
-                                f"<span style='color:#aaa'>{away}:</span> <b>{a_str}</b></div>",
-                                unsafe_allow_html=True)
+            _gt      = _game_time_myt(home, away)
+            _h_b2b_s = '<span style="background:rgba(245,166,35,.15);color:#f5a623;font-size:10px;font-weight:700;padding:1px 6px;border-radius:4px;margin-left:5px;vertical-align:middle">B2B</span>' if row.get("home_b2b") else ""
+            _a_b2b_s = '<span style="background:rgba(245,166,35,.15);color:#f5a623;font-size:10px;font-weight:700;padding:1px 6px;border-radius:4px;margin-left:5px;vertical-align:middle">B2B</span>' if row.get("away_b2b") else ""
+            _time_s  = f'<span style="color:#666;font-size:12px">{_gt}</span>' if _gt else ""
+            _border  = "border-left:3px solid #00c896;" if is_bet else ""
+
+            if is_bet:
+                _bet_part = rec.split("BET")[1].split("(")[0].strip() if "BET" in rec else ""
+                _rec_s = f'<span style="background:rgba(0,200,150,.15);color:#00c896;font-size:11px;font-weight:700;padding:2px 10px;border-radius:20px;margin-left:8px">⭐ BET {_bet_part}</span>'
+            else:
+                _rec_s = ""
+
+            # Odds row
+            _odds_row = ""
+            try:
+                if pinn_h is not None and pinn_a is not None:
+                    hs = fmt_ml(pinn_h); as_ = fmt_ml(pinn_a)
+                    if edge_h is not None and str(edge_h) != "nan":
+                        eh = float(edge_h); ea = float(edge_a)
+                        hc = "#00c896" if eh > 3 else ("#ff4b4b" if eh < -1 else "#888")
+                        ac = "#00c896" if ea > 3 else ("#ff4b4b" if ea < -1 else "#888")
+                        _odds_row = (
+                            f'<div style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.05);'
+                            f'display:flex;align-items:center;gap:16px;font-size:12px">'
+                            f'<span style="color:#444;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.5px">Pinnacle</span>'
+                            f'<span><b style="color:#ddd">{home}</b> <b>{hs}</b> <span style="color:{hc}">({eh:+.1f}%)</span></span>'
+                            f'<span><b style="color:#ddd">{away}</b> <b>{as_}</b> <span style="color:{ac}">({ea:+.1f}%)</span></span>'
+                            f'</div>'
+                        )
                     else:
-                        st.caption("No odds")
-                except:
-                    st.caption("No odds")
+                        _odds_row = (
+                            f'<div style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,0.05);'
+                            f'display:flex;align-items:center;gap:16px;font-size:12px">'
+                            f'<span style="color:#444;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.5px">Pinnacle</span>'
+                            f'<span><b style="color:#ddd">{home}</b> <b>{hs}</b></span>'
+                            f'<span><b style="color:#ddd">{away}</b> <b>{as_}</b></span>'
+                            f'</div>'
+                        )
+            except Exception:
+                pass
+
+            st.markdown(f"""<div class="game-card" style="{_border}">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+    <div style="font-size:16px;font-weight:700">
+      {home}{_h_b2b_s}
+      <span style="color:#444;margin:0 8px;font-weight:400">vs</span>
+      {away}{_a_b2b_s}
+    </div>
+    <div style="display:flex;align-items:center;gap:8px">{_time_s}{_rec_s}</div>
+  </div>
+  <div style="background:rgba(255,255,255,0.07);border-radius:4px;height:6px;overflow:hidden">
+    <div style="width:{p_home*100:.1f}%;height:100%;border-radius:4px;background:linear-gradient(90deg,#ff6b35,#f5a623)"></div>
+  </div>
+  <div style="display:flex;justify-content:space-between;font-size:12px;margin-top:5px">
+    <span style="font-weight:600;color:#ddd">{home} {p_home*100:.0f}%</span>
+    <span style="color:#444">Elo {elo:+.0f}</span>
+    <span style="font-weight:600;color:#ddd">{(1-p_home)*100:.0f}% {away}</span>
+  </div>
+  {_odds_row}
+</div>""", unsafe_allow_html=True)
 
             # ── Model breakdown + all books ───────────────────────────────────
             with st.expander("📊 Breakdown & odds"):
