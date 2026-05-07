@@ -561,7 +561,7 @@ if page == "🏀 Today's Predictions":
                 st.divider()
         else:
             st.info("No predictions yet. Click **Refresh / Generate** or run: `python predict.py`")
-            if selected_date == today.strftime("%Y-%m-%d"):
+            if selected_date == today_us.strftime("%Y-%m-%d"):
                 with st.expander("📋 Enter odds manually"):
                     st.code('python predict.py --odds "LAS:-150,IND:+130;NYL:-200,CON:+170"')
     else:
