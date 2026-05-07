@@ -65,6 +65,16 @@ def fmt_ml(ml):
     except (ValueError, TypeError):
         return str(ml)
 
+def fmt_myt(commence_str: str) -> str:
+    """Convert a UTC ISO-8601 commence_time string to Malaysia Time (UTC+8)."""
+    from datetime import timezone, timedelta
+    MYT = timezone(timedelta(hours=8))
+    try:
+        dt = datetime.fromisoformat(commence_str.replace("Z", "+00:00"))
+        return dt.astimezone(MYT).strftime("%I:%M %p MYT")
+    except Exception:
+        return ""
+
 # ── Storage ───────────────────────────────────────────────────────────────────
 TRACKER_FILE = ROOT / "logs" / "bet_tracker.json"
 
@@ -475,6 +485,13 @@ if page == "🏀 Today's Predictions":
                 return g.get("bookmakers", {}).get("pinnacle") or {}
         return {}
 
+    def _game_time_myt(home, away) -> str:
+        for g in raw_odds:
+            if (g.get("home_team","").upper() == home.upper() and
+                    g.get("away_team","").upper() == away.upper()):
+                return fmt_myt(g.get("commence_time",""))
+        return ""
+
     if preds.empty:
         if raw_odds:
             st.info("No model predictions yet — showing live odds. Click **Refresh / Generate** to run the model.")
@@ -487,11 +504,8 @@ if page == "🏀 Today's Predictions":
                 with c1:
                     st.markdown(f"**{ht}** vs {at}")
                     if commence:
-                        try:
-                            dt = datetime.fromisoformat(commence.replace("Z","+00:00"))
-                            st.caption(dt.strftime("%b %d  %H:%M UTC"))
-                        except (ValueError, AttributeError):
-                            st.caption(commence[:16])
+                        myt = fmt_myt(commence)
+                        st.caption(myt if myt else commence[:16])
                     for tm, players in [(ht, _team_injuries(ht)), (at, _team_injuries(at))]:
                         if players:
                             names = ", ".join(f"{p} ({s})" for p, s in players)
@@ -619,7 +633,8 @@ if page == "🏀 Today's Predictions":
             c1, c2, c3 = st.columns([2, 4, 3])
             with c1:
                 st.markdown(f"**{home}{b2b_h}** vs {away}{b2b_a}")
-                st.caption(f"Elo: {elo:+.0f}")
+                _gt = _game_time_myt(home, away)
+                st.caption(f"{_gt}  ·  Elo: {elo:+.0f}" if _gt else f"Elo: {elo:+.0f}")
             with c2:
                 bar = "█"*int(p_home*20) + "░"*(20-int(p_home*20))
                 st.markdown(f"`{bar}` {p_home*100:.0f}% / {(1-p_home)*100:.0f}%")
