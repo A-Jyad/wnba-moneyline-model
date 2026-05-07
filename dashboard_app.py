@@ -361,6 +361,14 @@ st.sidebar.title("🏀 WNBA Model")
 st.sidebar.caption(f"{date.today().strftime('%b %d, %Y')}  |  {date.today().year} Season")
 st.sidebar.caption("v2.0 · May 2026")
 
+# Supabase connection indicator
+try:
+    from src.supabase_store import _client as _sb_client
+    _sb_ok = _sb_client() is not None
+except Exception:
+    _sb_ok = False
+st.sidebar.caption("🟢 Supabase connected" if _sb_ok else "🔴 Supabase offline (local JSON)")
+
 page = st.sidebar.radio("Navigation", [
     "🏀 Today's Predictions",
     "🔬 Filter Playground",
