@@ -20,10 +20,12 @@ def _espn_injury_impact(injured_players: list, team: str,
                          player_df: pd.DataFrame, lineup_strength_avg10: float) -> float:
     """
     Estimate injury impact from live ESPN-reported injured players.
-    Looks up each player's recent avg minutes from player game logs
-    and returns their collective contribution as a fraction of the team baseline.
+    injured_players is a list of (player_name, status) tuples.
+    Out/Doubtful count at full weight; Day-To-Day at 0.5.
     """
     from src.features import _parse_minutes
+
+    _STATUS_WEIGHT = {"Out": 1.0, "Doubtful": 1.0, "Day-To-Day": 0.5}
 
     if not injured_players or player_df is None or lineup_strength_avg10 <= 0:
         return 0.0
@@ -40,12 +42,71 @@ def _espn_injury_impact(injured_players: list, team: str,
     )
 
     injured_minutes = 0.0
-    for player in injured_players:
-        matches = player_avg[player_avg.index.str.lower().str.contains(player.lower(), na=False)]
-        if not matches.empty:
-            injured_minutes += float(matches.iloc[0])
+    for player, status in injured_players:
+        weight = _STATUS_WEIGHT.get(status, 1.0)
+        # Exact match first, then substring fallback to avoid "Jo" matching "Jordan"
+        p_lower = player.lower()
+        exact = player_avg[player_avg.index.str.lower() == p_lower]
+        if not exact.empty:
+            injured_minutes += float(exact.iloc[0]) * weight
+        else:
+            sub = player_avg[player_avg.index.str.lower().str.contains(p_lower, na=False)]
+            if not sub.empty:
+                injured_minutes += float(sub.iloc[0]) * weight
 
     return float(np.clip(injured_minutes / lineup_strength_avg10, 0.0, 1.0))
+
+
+def _update_elo_from_season(elo: "EloSystem", raw: pd.DataFrame, season: str) -> None:
+    """
+    Update Elo ratings in-place using completed games from `season` in `raw`.
+    Uses MATCHUP column (' vs. ' = home, ' @ ' = away) to pair rows.
+    Saves updated state back to disk so the next run continues from here.
+    """
+    if raw.empty or "MATCHUP" not in raw.columns:
+        return
+
+    season_df = raw[raw.get("SEASON", raw.get("season", pd.Series(dtype=str))).astype(str) == str(season)].copy()
+    if season_df.empty:
+        # Try inferring season from GAME_DATE
+        if "GAME_DATE" in raw.columns:
+            raw2 = raw.copy()
+            raw2["_yr"] = pd.to_datetime(raw2["GAME_DATE"], errors="coerce").dt.year.astype("Int64").astype(str)
+            season_df = raw2[raw2["_yr"] == str(season)].copy()
+    if season_df.empty:
+        return
+
+    # Only completed games (have a W or L result)
+    if "WL" in season_df.columns:
+        season_df = season_df[season_df["WL"].isin(["W", "L"])].copy()
+    if season_df.empty:
+        return
+
+    season_df = season_df.sort_values("GAME_DATE")
+
+    # Identify home rows: MATCHUP like "ATL vs. CHI"
+    home_mask = season_df["MATCHUP"].str.contains(r" vs\. ", na=False)
+    home_rows = season_df[home_mask][["GAME_ID", "GAME_DATE", "TEAM_ABBREVIATION", "WL"]].copy()
+    away_rows = season_df[~home_mask][["GAME_ID", "TEAM_ABBREVIATION"]].copy()
+    away_rows = away_rows.rename(columns={"TEAM_ABBREVIATION": "AWAY_TEAM"})
+
+    paired = home_rows.merge(away_rows, on="GAME_ID", how="inner")
+    if paired.empty:
+        return
+
+    paired = paired.sort_values("GAME_DATE")
+    for _, row in paired.iterrows():
+        elo.update(
+            home_team = str(row["TEAM_ABBREVIATION"]),
+            away_team = str(row["AWAY_TEAM"]),
+            home_won  = 1 if row["WL"] == "W" else 0,
+            season    = str(season),
+            game_date = str(row["GAME_DATE"]),
+            game_id   = str(row["GAME_ID"]),
+        )
+
+    elo.save()
+    log.info(f"Elo updated from {len(paired)} completed {season} games → saved")
 
 
 def get_current_season(target_date: str | None = None) -> str:
@@ -144,7 +205,8 @@ def predict_today(
         log.warning("No game log data — model only mode")
         rolled = pd.DataFrame()
 
-    # Build Elo
+    # Build Elo — load saved end-of-season state, then update with any
+    # completed games from the current season so ratings stay current.
     elo = EloSystem()
     if (CACHE_DIR / "elo_state.json").exists():
         elo.load()
@@ -159,6 +221,9 @@ def predict_today(
         except Exception as e:
             log.warning(f"Elo recompute failed: {e}")
 
+    if not raw.empty:
+        _update_elo_from_season(elo, raw, season)
+
     # Load model
     model = WNBAEnsemble()
     try:
@@ -171,6 +236,13 @@ def predict_today(
     # Team rest/streak states
     team_states = get_current_team_states(season, rolled) if not rolled.empty else {}
 
+    # Force-refresh injury report and odds on every run
+    for _stale in [CACHE_DIR / "wnba_odds_live.json",
+                   CACHE_DIR / "odds_live.json",
+                   CACHE_DIR / "injury_report.json"]:
+        if _stale.exists():
+            _stale.unlink()
+
     # Fetch live injury report
     log.info("Fetching injury report...")
     try:
@@ -181,19 +253,22 @@ def predict_today(
         injury_df = pd.DataFrame(columns=["team", "player", "status", "TEAM_ABBREVIATION"])
 
     # Load player game logs for minute-weighted injury impact
+    # Falls back to previous season if current season has no games yet
     player_df = None
-    try:
-        raw_players = fetch_player_game_logs(season, "Regular Season")
-        if not raw_players.empty:
-            player_df = raw_players.copy()
-            player_df.columns = player_df.columns.str.upper()
-            if "GAME_DATE" in player_df.columns:
-                player_df["GAME_DATE"] = pd.to_datetime(player_df["GAME_DATE"])
-            log.info(f"Player logs loaded: {len(player_df):,} rows")
-        else:
-            log.info("No player logs — injury impact will default to 0")
-    except Exception as e:
-        log.warning(f"Player logs load failed: {e}")
+    for _s in [season, str(int(season) - 1)]:
+        try:
+            raw_players = fetch_player_game_logs(_s, "Regular Season")
+            if not raw_players.empty:
+                player_df = raw_players.copy()
+                player_df.columns = player_df.columns.str.upper()
+                if "GAME_DATE" in player_df.columns:
+                    player_df["GAME_DATE"] = pd.to_datetime(player_df["GAME_DATE"])
+                log.info(f"Player logs loaded ({_s}): {len(player_df):,} rows")
+                break
+        except Exception as e:
+            log.warning(f"Player logs load failed ({_s}): {e}")
+    if player_df is None:
+        log.info("No player logs available — injury impact will default to 0")
 
     if not rolled.empty and player_df is not None:
         from src.features import build_lineup_injury_features, build_team_strength_features
@@ -205,9 +280,6 @@ def predict_today(
     # Fetch live odds
     log.info("Fetching live odds...")
     try:
-        stale = CACHE_DIR / "wnba_odds_live.json"
-        if stale.exists():
-            stale.unlink()
         live_odds = get_odds_dict(force_refresh=True, target_date=target_date)
         log.info(f"Live odds loaded: {len(live_odds)} matchups" if live_odds else "No live odds available")
     except Exception as e:
@@ -234,13 +306,13 @@ def predict_today(
 
         # ── Injury snapshot ───────────────────────────────────────────────────
         if not injury_df.empty and "TEAM_ABBREVIATION" in injury_df.columns:
-            out_mask = injury_df["status"].isin(["Out", "Doubtful"])
-            home_out = injury_df[
+            out_mask = injury_df["status"].isin(["Out", "Doubtful", "Day-To-Day"])
+            home_out = list(injury_df[
                 (injury_df["TEAM_ABBREVIATION"] == home) & out_mask
-            ]["player"].tolist()
-            away_out = injury_df[
+            ][["player", "status"]].itertuples(index=False, name=None))
+            away_out = list(injury_df[
                 (injury_df["TEAM_ABBREVIATION"] == away) & out_mask
-            ]["player"].tolist()
+            ][["player", "status"]].itertuples(index=False, name=None))
 
         # ── Model prediction with injury-adjusted features ────────────────────
         if model is not None and not rolled.empty:
@@ -280,12 +352,31 @@ def predict_today(
                     home_baseline = float(h_last.get("lineup_strength_avg10") or 0)
                     away_baseline = float(a_last.get("lineup_strength_avg10") or 0)
 
+                    def _fallback_baseline(team: str, pdf: pd.DataFrame) -> float:
+                        """Top-10 players' avg minutes sum — used when rolling feature is 0."""
+                        if pdf is None or pdf.empty:
+                            return 0.0
+                        tp = pdf[pdf["TEAM_ABBREVIATION"] == team].copy()
+                        if tp.empty or "MIN" not in tp.columns:
+                            return 0.0
+                        from src.features import _parse_minutes
+                        tp["MIN_FLOAT"] = tp["MIN"].apply(_parse_minutes)
+                        avgs = tp[tp["MIN_FLOAT"] > 0].groupby("PLAYER_NAME")["MIN_FLOAT"].mean()
+                        return float(avgs.nlargest(10).sum()) if len(avgs) > 0 else 0.0
+
+                    # Use full player_df (not pdf_prior) so early-season baseline works
+                    _pdf_for_impact = player_df if (player_df is not None and not player_df.empty) else pdf_prior
+                    if home_baseline <= 0 and _pdf_for_impact is not None:
+                        home_baseline = _fallback_baseline(home, _pdf_for_impact)
+                    if away_baseline <= 0 and _pdf_for_impact is not None:
+                        away_baseline = _fallback_baseline(away, _pdf_for_impact)
+
                     home_impact = (
-                        _espn_injury_impact(home_out, home, pdf_prior, home_baseline)
+                        _espn_injury_impact(home_out, home, _pdf_for_impact, home_baseline)
                         if home_baseline > 0 else 0.0
                     )
                     away_impact = (
-                        _espn_injury_impact(away_out, away, pdf_prior, away_baseline)
+                        _espn_injury_impact(away_out, away, _pdf_for_impact, away_baseline)
                         if away_baseline > 0 else 0.0
                     )
                     home_ts_adj = float(h_last.get("PLUS_MINUS_roll10") or 0) - 3.0 * home_impact
@@ -347,8 +438,8 @@ def predict_today(
             "away_b2b":           bool(away_state.get("is_b2b", 0)),
             "home_streak":        int(home_state.get("win_streak", 0)),
             "away_streak":        int(away_state.get("win_streak", 0)),
-            "home_injuries":      ", ".join(home_out) if home_out else "None",
-            "away_injuries":      ", ".join(away_out) if away_out else "None",
+            "home_injuries":      ", ".join(f"{p} ({s})" for p, s in home_out) if home_out else "None",
+            "away_injuries":      ", ".join(f"{p} ({s})" for p, s in away_out) if away_out else "None",
             "home_players_out":   len(home_out),
             "away_players_out":   len(away_out),
             "home_injury_impact": round(home_impact, 4),

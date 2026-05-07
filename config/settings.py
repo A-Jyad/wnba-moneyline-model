@@ -103,7 +103,7 @@ BET_MAX_EDGE       = 60.0
 BET_MIN_ODDS       = 120
 BET_MAX_ODDS       = 325
 BET_UNDERDOGS_ONLY = True  
-BET_AWAY_ONLY      = False
+BET_AWAY_ONLY      = True
 
 KELLY_FRACTION     = 0.25
 MAX_BET_PCT        = 3.0

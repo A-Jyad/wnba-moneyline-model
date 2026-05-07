@@ -23,19 +23,38 @@ ROOT = Path(__file__).parent
 sys.path.insert(0, str(ROOT))
 (ROOT / "logs").mkdir(exist_ok=True)
 
+# ── Authentication ────────────────────────────────────────────────────────────
+def _check_password():
+    pwd = st.secrets.get("password", "")
+    if not pwd:
+        st.error("Dashboard password not configured. Set `password` in Streamlit secrets.")
+        st.stop()
+    def _submit():
+        st.session_state["_auth"] = (st.session_state.get("_pw") == pwd)
+    if not st.session_state.get("_auth"):
+        _, mid, _ = st.columns([1, 2, 1])
+        with mid:
+            st.markdown("## 🏀 WNBA Model")
+            st.text_input("Password", type="password", key="_pw", on_change=_submit)
+            if st.session_state.get("_auth") is False:
+                st.error("Incorrect password")
+        st.stop()
+
+_check_password()
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 def american_to_decimal(ml):
     try:
         ml = float(ml)
         return ml / 100 + 1 if ml > 0 else 100 / abs(ml) + 1
-    except:
+    except (ValueError, TypeError):
         return 1.909
 
 def fmt_ml(ml):
     try:
         ml = int(float(ml))
         return f"+{ml}" if ml > 0 else str(ml)
-    except:
+    except (ValueError, TypeError):
         return str(ml)
 
 # ── Storage ───────────────────────────────────────────────────────────────────
@@ -43,13 +62,23 @@ TRACKER_FILE = ROOT / "logs" / "bet_tracker.json"
 
 def load_bets():
     if TRACKER_FILE.exists():
-        with open(TRACKER_FILE) as f:
-            return json.load(f)
+        try:
+            with open(TRACKER_FILE) as f:
+                return json.load(f)
+        except (json.JSONDecodeError, IOError):
+            # Back up corrupted file before returning empty
+            import shutil
+            shutil.copy(TRACKER_FILE, str(TRACKER_FILE) + ".bak")
+            return []
     return []
 
 def save_bets(bets):
-    with open(TRACKER_FILE, "w") as f:
+    # Atomic write: write to temp then rename to avoid partial writes
+    import tempfile, os
+    tmp = str(TRACKER_FILE) + ".tmp"
+    with open(tmp, "w") as f:
         json.dump(bets, f, indent=2, default=str)
+    os.replace(tmp, TRACKER_FILE)
 
 def find_bet(bets, date, home, away, bet_team):
     for i, b in enumerate(bets):
@@ -127,10 +156,21 @@ def load_closing_book(book_key: str) -> pd.DataFrame:
         return pd.DataFrame()
     return pd.concat(dfs, ignore_index=True)
 
+_REQUIRED_PRED_COLS = ["home_team", "away_team", "p_home_win", "recommendation"]
+
 @st.cache_data(ttl=300)
 def load_predictions_for_date(target_date: str) -> pd.DataFrame:
     f = LOG_DIR / f"predictions_{target_date}.csv"
-    return pd.read_csv(f) if f.exists() else pd.DataFrame()
+    if not f.exists():
+        return pd.DataFrame()
+    try:
+        df = pd.read_csv(f)
+    except Exception:
+        return pd.DataFrame()
+    missing = [c for c in _REQUIRED_PRED_COLS if c not in df.columns]
+    if missing:
+        return pd.DataFrame()
+    return df
 
 @st.cache_data(ttl=300)
 def load_raw_odds_for_date(target_date: str) -> list:
@@ -289,13 +329,33 @@ def summarise(df):
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 st.sidebar.title("🏀 WNBA Model")
 st.sidebar.caption(f"{date.today().strftime('%b %d, %Y')}  |  {date.today().year} Season")
+st.sidebar.caption("v2.0 · May 2026")
 
 page = st.sidebar.radio("", [
     "🏀 Today's Predictions",
     "🔬 Filter Playground",
     "📋 Bet Tracker",
     "📈 Performance",
+    "ℹ️ About",
 ])
+
+# Season-to-date sidebar stats
+try:
+    _sb = load_bets()
+    if _sb:
+        _sdf = pd.DataFrame(_sb)
+        _dec = _sdf[_sdf["result"].isin(["win","loss"])]
+        if len(_dec):
+            _w = (_dec["result"]=="win").sum(); _t = len(_dec)
+            _pnl = pd.to_numeric(_dec["pnl"], errors="coerce").sum()
+            st.sidebar.divider()
+            st.sidebar.caption("📊 Season-to-date")
+            c1, c2 = st.sidebar.columns(2)
+            c1.metric("Record", f"{_w}W-{_t-_w}L")
+            c2.metric("ROI", f"{_pnl/_t*100:+.1f}%")
+            st.sidebar.metric("P&L", f"{_pnl:+.2f}u", delta=f"{(len(_sdf)-_t)} pending")
+except Exception:
+    pass
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE 1: TODAY'S PREDICTIONS
@@ -316,7 +376,16 @@ if page == "🏀 Today's Predictions":
         format_func=lambda d: day_names[date_opts.index(d)],
         horizontal=True, label_visibility="collapsed",
     )
-    st.caption(date.fromisoformat(selected_date).strftime("%A, %B %d, %Y"))
+    _pred_path = LOG_DIR / f"predictions_{selected_date}.csv"
+    _date_col, _ts_col = st.columns([3, 2])
+    _date_col.caption(date.fromisoformat(selected_date).strftime("%A, %B %d, %Y"))
+    _last_ts = st.session_state.get(f"refresh_ts_{selected_date}")
+    if _last_ts:
+        _age_s = (datetime.now() - _last_ts).total_seconds()
+        _age_str = f"{int(_age_s/60)}m ago" if _age_s < 3600 else f"{int(_age_s/3600)}h ago"
+        _ts_col.caption(f"🕐 Updated {_age_str}")
+    elif _pred_path.exists():
+        _ts_col.caption("🕐 From cache")
 
     # Auto-refresh once per session per date (replaces GitHub Actions morning run)
     _session_key = f"predicted_{selected_date}"
@@ -332,16 +401,18 @@ if page == "🏀 Today's Predictions":
             except Exception:
                 pass
         st.session_state[_session_key] = True
+        st.session_state[f"refresh_ts_{selected_date}"] = datetime.now()
 
     _, col_b = st.columns([4, 1])
     with col_b:
         if st.button("🔄 Refresh / Generate", use_container_width=True):
             st.cache_data.clear()
-            st.session_state[_session_key] = False  # allow auto-refresh again next open
+            st.session_state[_session_key] = False
             try:
                 from src.predict import predict_today, get_current_season
                 result = predict_today(target_date=selected_date,
                                        season=get_current_season(selected_date))
+                st.session_state[f"refresh_ts_{selected_date}"] = datetime.now()
                 st.success(f"Updated! {len(result)} games." if result is not None and not result.empty
                            else "No games found.")
             except Exception as e:
@@ -381,7 +452,7 @@ if page == "🏀 Today's Predictions":
                         try:
                             dt = datetime.fromisoformat(commence.replace("Z","+00:00"))
                             st.caption(dt.strftime("%b %d  %H:%M UTC"))
-                        except:
+                        except (ValueError, AttributeError):
                             st.caption(commence[:16])
                     for tm, players in [(ht, _team_injuries(ht)), (at, _team_injuries(at))]:
                         if players:
@@ -400,12 +471,18 @@ if page == "🏀 Today's Predictions":
                 with st.expander("📋 Enter odds manually"):
                     st.code('python predict.py --odds "LAS:-150,IND:+130;NYL:-200,CON:+170"')
     else:
+        # Warn if model failed — all predictions stuck at 50%
+        if "p_home_win" in preds.columns:
+            _probs = preds["p_home_win"].dropna()
+            if len(_probs) > 0 and (_probs == 0.5).all():
+                st.warning("⚠️ Model failed to load — all predictions defaulted to 50%. Check that model files are present and sklearn version matches.", icon="⚠️")
+
         try:
             from config.settings import MIN_EDGE_PCT, BET_MAX_ODDS, BET_MIN_ODDS
             live_min_edge = st.session_state.get("saved_min_edge", int(MIN_EDGE_PCT))
             live_min_odds = st.session_state.get("saved_min_odds", int(abs(BET_MIN_ODDS))) + 1
             live_max_odds = st.session_state.get("saved_max_odds", int(BET_MAX_ODDS))
-        except:
+        except (ImportError, Exception):
             live_min_edge, live_min_odds, live_max_odds = 15, 141, 500
 
         if "has_edge" in preds.columns:
@@ -445,14 +522,6 @@ if page == "🏀 Today's Predictions":
                     with c1:
                         st.markdown(f"### {home} vs {away}")
                         st.markdown(f"**🎯 BET {bet_team} ({odds_str})**")
-                        for tm, players, imp in [(home, _team_injuries(home), home_imp),
-                                                  (away, _team_injuries(away), away_imp)]:
-                            if players:
-                                names   = ", ".join(f"{p} ({s})" for p, s in players)
-                                imp_str = f" — {imp:.0%} impact" if imp > 0.01 else ""
-                                st.markdown(
-                                    f"<span style='color:#f5a623'>⚠️ **{tm}:** {names}{imp_str}</span>",
-                                    unsafe_allow_html=True)
                     c2.metric("Edge", f"{edge_str}%")
                     c3.metric("EV", ev_str)
                     c4.metric("Kelly %", f"{kelly:.1f}%")
@@ -513,14 +582,6 @@ if page == "🏀 Today's Predictions":
             with c1:
                 st.markdown(f"**{home}{b2b_h}** vs {away}{b2b_a}")
                 st.caption(f"Elo: {elo:+.0f}")
-                for tm, players, imp in [(home, _team_injuries(home), home_imp),
-                                          (away, _team_injuries(away), away_imp)]:
-                    if players:
-                        names   = ", ".join(f"{p} ({s})" for p, s in players)
-                        imp_str = f" ({imp:.0%})" if imp > 0.01 else ""
-                        st.markdown(
-                            f"<span style='color:#f5a623;font-size:12px'>⚠️ {tm}{imp_str}: {names}</span>",
-                            unsafe_allow_html=True)
             with c2:
                 bar = "█"*int(p_home*20) + "░"*(20-int(p_home*20))
                 st.markdown(f"`{bar}` {p_home*100:.0f}% / {(1-p_home)*100:.0f}%")
@@ -559,6 +620,58 @@ if page == "🏀 Today's Predictions":
                         st.caption("No odds")
                 except:
                     st.caption("No odds")
+
+            # ── Model breakdown + all books ───────────────────────────────────
+            with st.expander("📊 Breakdown & odds"):
+                dc1, dc2 = st.columns(2)
+                with dc1:
+                    st.caption("**Model signals**")
+                    h_streak = int(row.get("home_streak", 0) or 0)
+                    a_streak = int(row.get("away_streak", 0) or 0)
+                    _h_str = f"W{h_streak}" if h_streak > 0 else f"L{abs(h_streak)}" if h_streak < 0 else "—"
+                    _a_str = f"W{a_streak}" if a_streak > 0 else f"L{abs(a_streak)}" if a_streak < 0 else "—"
+                    _h_b2b = " ⚠️ B2B" if row.get("home_b2b") else ""
+                    _a_b2b = " ⚠️ B2B" if row.get("away_b2b") else ""
+                    def _inj_str(val):
+                        s = str(val) if val is not None else ""
+                        return "" if s.lower() in ("none", "nan", "") else s
+                    _h_inj = _inj_str(row.get("home_injuries"))
+                    _a_inj = _inj_str(row.get("away_injuries"))
+                    _inj_lines = ""
+                    if _h_inj:
+                        _inj_lines += f"🚑 {home} OUT: {_h_inj}  \n"
+                    if _a_inj:
+                        _inj_lines += f"🚑 {away} OUT: {_a_inj}  \n"
+                    st.markdown(
+                        f"Elo diff: **{elo:+.0f}**  \n"
+                        f"Streak: {home} **{_h_str}** / {away} **{_a_str}**  \n"
+                        f"{home}{_h_b2b} / {away}{_a_b2b}  \n"
+                        + (_inj_lines if _inj_lines else "No reported injuries  \n") +
+                        f"Injury impact: {home} **{home_imp:.0%}** / {away} **{away_imp:.0%}**"
+                    )
+                with dc2:
+                    st.caption("**All books**")
+                    _raw_g = next((g for g in raw_odds
+                                   if g.get("home_team","").upper()==home.upper()
+                                   and g.get("away_team","").upper()==away.upper()), {})
+                    _books = _raw_g.get("bookmakers", {})
+                    if _books:
+                        _BOOK_LABELS = {
+                            "pinnacle":"Pinnacle","draftkings":"DraftKings",
+                            "fanduel":"FanDuel","betfair_ex_eu":"Betfair",
+                            "unibet_uk":"Unibet","betsson":"Betsson","nordicbet":"NordicBet",
+                        }
+                        for bk, bv in _books.items():
+                            bh_val = bv.get("home"); ba_val = bv.get("away")
+                            if not bh_val or not ba_val or abs(bh_val) >= 5000 or abs(ba_val) >= 5000:
+                                continue  # skip invalid/placeholder lines
+                            bname = _BOOK_LABELS.get(bk, bk)
+                            bh = fmt_ml(bh_val); ba = fmt_ml(ba_val)
+                            st.markdown(f"<span style='color:#aaa;font-size:12px'>{bname}:</span> "
+                                        f"**{home} {bh}** / **{away} {ba}**",
+                                        unsafe_allow_html=True)
+                    else:
+                        st.caption("No book data")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -780,6 +893,41 @@ elif page == "📋 Bet Tracker":
             st.success("Logged!")
             st.rerun()
 
+    # Auto-reconcile pending bets against game log results
+    if bets and any(b.get("result") == "pending" for b in bets):
+        if st.button("🔄 Auto-reconcile pending bets"):
+            from src.scraper import fetch_season_game_log
+            updated = 0
+            all_bets = load_bets()
+            for b in all_bets:
+                if b.get("result") != "pending":
+                    continue
+                try:
+                    bet_dt = pd.to_datetime(b["date"])
+                    season = str(bet_dt.year) if bet_dt.month >= 5 else str(bet_dt.year - 1)
+                    logs = fetch_season_game_log(season)
+                    if logs.empty:
+                        continue
+                    logs["GAME_DATE"] = pd.to_datetime(logs["GAME_DATE"]).dt.strftime("%Y-%m-%d")
+                    game_day = logs[logs["GAME_DATE"] == b["date"]]
+                    team_row = game_day[game_day["TEAM_ABBREVIATION"] == b["bet_team"]]
+                    if team_row.empty:
+                        continue
+                    result = "win" if team_row.iloc[0]["WL"] == "W" else "loss"
+                    dec    = american_to_decimal(b["bet_odds"])
+                    units  = float(b["units"])
+                    b["result"] = result
+                    b["pnl"]    = round((dec - 1) * units, 3) if result == "win" else -units
+                    updated += 1
+                except Exception:
+                    continue
+            save_bets(all_bets)
+            if updated:
+                st.success(f"Reconciled {updated} bet(s).")
+                st.rerun()
+            else:
+                st.info("No pending bets could be reconciled — results may not be posted yet.")
+
     if not bets:
         st.info("No bets yet.")
     else:
@@ -941,3 +1089,58 @@ elif page == "📈 Performance":
         fig3.update_layout(height=260, coloraxis_showscale=False,
                            plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)")
         st.plotly_chart(fig3, use_container_width=True)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAGE 5: ABOUT
+# ══════════════════════════════════════════════════════════════════════════════
+
+elif page == "ℹ️ About":
+    st.title("ℹ️ About This Model")
+
+    st.markdown("""
+    ### What this is
+    A machine-learning ensemble that predicts the probability of the home team winning each WNBA
+    game, then compares that probability against Pinnacle's vig-removed line to identify value bets.
+
+    ### How predictions are made
+    The model blends four signals:
+
+    | Signal | Weight | Description |
+    |--------|--------|-------------|
+    | Logistic Regression | 25% | Linear baseline on rolling team stats |
+    | XGBoost | 35% | Gradient-boosted trees, Optuna-tuned |
+    | LightGBM | 35% | Gradient-boosted trees, Optuna-tuned |
+    | Elo | 5% | Head-to-head team strength rating |
+
+    Rolling features include: points scored/allowed, plus-minus, pace, win streak, rest days,
+    back-to-back flags, and live injury impact (minute-weighted ESPN data).
+
+    ### Bet filter criteria
+    A bet is flagged only when **all** of the following are met:
+    - Model edge vs. Pinnacle ≥ **15%**
+    - Odds between **+120** and **+325** (away underdogs only)
+    - Edge cap of **60%** (extreme outliers excluded)
+
+    These filters were optimised on clean out-of-sample seasons (2024–2025).
+
+    ### Data sources
+    - **Game logs & schedule:** stats.wnba.com (official WNBA stats API)
+    - **Injury reports:** ESPN
+    - **Odds:** The Odds API (Pinnacle sharp line + major US books)
+
+    ### Model performance (backtest, 2024–2025)
+    Backtested against Pinnacle closing lines — the sharpest available market.
+    See the **Filter Playground** tab for full season-by-season breakdown.
+
+    ---
+    ### ⚠️ Disclaimer
+    This tool is provided for **informational and entertainment purposes only**.
+    It does not constitute financial, investment, or gambling advice.
+    Past model performance does not guarantee future results.
+    Sports betting involves significant risk — only bet what you can afford to lose.
+    The operator of this tool accepts no liability for any losses incurred.
+    Please comply with the gambling laws applicable in your jurisdiction.
+    """)
+
+    st.divider()
+    st.caption("Model v2.0 · Trained May 2026 · WNBA seasons 2015–2025")

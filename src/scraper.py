@@ -184,7 +184,9 @@ def fetch_injury_report() -> pd.DataFrame:
         if age < CACHE_TTL:
             log.info(f"  Injury report: using cache ({age/60:.0f}min old).")
             with open(cache_file) as f:
-                return pd.DataFrame(json.load(f))
+                df = pd.DataFrame(json.load(f))
+            df['TEAM_ABBREVIATION'] = df['team'].map(WNBA_TEAMS)
+            return df
 
     # ESPN public injury API — no key, no auth, works globally
     url = "https://site.api.espn.com/apis/site/v2/sports/basketball/wnba/injuries"
@@ -201,11 +203,11 @@ def fetch_injury_report() -> pd.DataFrame:
         data = resp.json()
 
         for team_entry in data.get("injuries", []):
+            team_name = team_entry.get("displayName", "")
             for injury in team_entry.get("injuries", []):
                 athlete = injury.get("athlete", {})
-                team = athlete.get("team", {})
                 rows.append({
-                    "team":   team.get("displayName", ""),
+                    "team":   team_name,
                     "player": athlete.get("displayName", ""),
                     "status": injury.get("status", ""),
                     "reason": injury.get("longComment", injury.get("shortComment", "")),
