@@ -2,7 +2,7 @@
 WNBA Model Dashboard
 Run: python -m streamlit run dashboard_app.py
 """
-import sys, json
+import os, sys, json
 from pathlib import Path
 from datetime import date, datetime
 
@@ -11,6 +11,14 @@ import numpy as np
 import streamlit as st
 import plotly.graph_objects as go
 import plotly.express as px
+
+# Inject Streamlit secrets into os.environ so backend modules that read
+# os.environ at import time (odds_scraper, etc.) pick them up correctly.
+for _secret_key in ["ODDS_API_KEY"]:
+    if _secret_key not in os.environ:
+        _val = st.secrets.get(_secret_key, "")
+        if _val:
+            os.environ[_secret_key] = _val
 
 st.set_page_config(
     page_title="WNBA Model Dashboard",
@@ -331,13 +339,13 @@ st.sidebar.title("🏀 WNBA Model")
 st.sidebar.caption(f"{date.today().strftime('%b %d, %Y')}  |  {date.today().year} Season")
 st.sidebar.caption("v2.0 · May 2026")
 
-page = st.sidebar.radio("", [
+page = st.sidebar.radio("Navigation", [
     "🏀 Today's Predictions",
     "🔬 Filter Playground",
     "📋 Bet Tracker",
     "📈 Performance",
     "ℹ️ About",
-])
+], label_visibility="collapsed")
 
 # Season-to-date sidebar stats
 try:
