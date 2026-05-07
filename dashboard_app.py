@@ -13,8 +13,8 @@ import plotly.graph_objects as go
 import plotly.express as px
 
 # Inject Streamlit secrets into os.environ so backend modules that read
-# os.environ at import time (odds_scraper, etc.) pick them up correctly.
-for _secret_key in ["ODDS_API_KEY"]:
+# os.environ at import time (odds_scraper, supabase_store, etc.) pick them up.
+for _secret_key in ["ODDS_API_KEY", "SUPABASE_URL", "SUPABASE_KEY"]:
     if _secret_key not in os.environ:
         _val = st.secrets.get(_secret_key, "")
         if _val:
@@ -68,28 +68,17 @@ def fmt_ml(ml):
 # ── Storage ───────────────────────────────────────────────────────────────────
 TRACKER_FILE = ROOT / "logs" / "bet_tracker.json"
 
-def _get_supabase():
-    """Return a Supabase client if SUPABASE_URL / SUPABASE_KEY are configured, else None."""
-    try:
-        url = st.secrets.get("SUPABASE_URL", "")
-        key = st.secrets.get("SUPABASE_KEY", "")
-        if not url or not key:
-            return None
-        from supabase import create_client
-        return create_client(url, key)
-    except Exception:
-        return None
+from src.supabase_store import (
+    save as _sb_save, load as _sb_load,
+    save_injury_report as _sb_save_injuries,
+    load_injury_report as _sb_load_injuries,
+)
 
 def load_bets():
     # Try Supabase first (persists across Streamlit Cloud redeploys)
-    sb = _get_supabase()
-    if sb:
-        try:
-            res = sb.table("model_config").select("value").eq("key", "bets").execute()
-            if res.data:
-                return res.data[0]["value"] or []
-        except Exception:
-            pass
+    bets = _sb_load("bets")
+    if bets is not None:
+        return bets
     # JSON fallback (local dev or if Supabase not yet configured)
     if TRACKER_FILE.exists():
         try:
@@ -102,12 +91,7 @@ def load_bets():
 
 def save_bets(bets):
     # Persist to Supabase when configured
-    sb = _get_supabase()
-    if sb:
-        try:
-            sb.table("model_config").upsert({"key": "bets", "value": bets}).execute()
-        except Exception:
-            pass
+    _sb_save("bets", bets)
     # Always write JSON backup (atomic write to avoid partial files)
     tmp = str(TRACKER_FILE) + ".tmp"
     with open(tmp, "w") as f:
@@ -216,14 +200,26 @@ def load_raw_odds_for_date(target_date: str) -> list:
 
 @st.cache_data(ttl=1800)
 def load_live_injury_report() -> pd.DataFrame:
+    _empty = pd.DataFrame(columns=["team", "player", "status", "reason", "TEAM_ABBREVIATION"])
+    # Check Supabase cache first (survives redeploys, shared across sessions)
+    try:
+        cached_df, is_fresh = _sb_load_injuries()
+        if is_fresh and cached_df is not None and not cached_df.empty:
+            if "TEAM_ABBREVIATION" not in cached_df.columns and "team" in cached_df.columns:
+                from src.scraper import WNBA_TEAMS
+                cached_df["TEAM_ABBREVIATION"] = cached_df["team"].map(WNBA_TEAMS)
+            return cached_df
+    except Exception:
+        pass
+    # Supabase stale or unavailable — fetch fresh from ESPN and save
     try:
         from src.scraper import fetch_injury_report
         df = fetch_injury_report()
-        return df if not df.empty else pd.DataFrame(
-            columns=["team", "player", "status", "reason", "TEAM_ABBREVIATION"])
+        if not df.empty:
+            _sb_save_injuries(df)
+        return df if not df.empty else _empty
     except Exception:
-        return pd.DataFrame(
-            columns=["team", "player", "status", "reason", "TEAM_ABBREVIATION"])
+        return _empty
 
 # ── Filter engine ─────────────────────────────────────────────────────────────
 def implied_prob(ml):

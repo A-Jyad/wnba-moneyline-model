@@ -252,11 +252,17 @@ def predict_today(
         if _stale.exists():
             _stale.unlink()
 
-    # Fetch live injury report
+    # Fetch live injury report and persist to Supabase
     log.info("Fetching injury report...")
     try:
         injury_df = fetch_injury_report()
         log.info(f"Injury report: {len(injury_df)} players")
+        if not injury_df.empty:
+            try:
+                from src.supabase_store import save_injury_report as _sb_inj
+                _sb_inj(injury_df)
+            except Exception as _e:
+                log.debug(f"Supabase injury save skipped: {_e}")
     except Exception as e:
         log.warning(f"Injury report fetch failed: {e}")
         injury_df = pd.DataFrame(columns=["team", "player", "status", "TEAM_ABBREVIATION"])
