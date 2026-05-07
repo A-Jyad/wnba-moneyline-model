@@ -440,32 +440,40 @@ except Exception:
 # ══════════════════════════════════════════════════════════════════════════════
 
 if page == "🏀 Today's Predictions":
-    from datetime import timedelta
+    from datetime import timedelta, timezone as _tz
 
-    today     = date.today()
+    # Use Malaysia Time (UTC+8) so dates are always correct for the client
+    _MYT     = _tz(timedelta(hours=8))
+    today    = datetime.now(_MYT).date()
     date_opts = [(today + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(8)]
     day_names = (["Today", "Tomorrow"]
                  + [(today + timedelta(days=i)).strftime("%a %b %d") for i in range(2, 8)])
 
+    # ── Header: title + date selector + refresh button in one row ────────────
     st.title("🏀 WNBA Predictions")
 
-    selected_date = st.radio(
-        "date_range", options=date_opts,
-        format_func=lambda d: day_names[date_opts.index(d)],
-        horizontal=True, label_visibility="collapsed",
-    )
-    _pred_path = LOG_DIR / f"predictions_{selected_date}.csv"
-    _date_col, _ts_col = st.columns([3, 2])
-    _date_col.caption(date.fromisoformat(selected_date).strftime("%A, %B %d, %Y"))
-    _last_ts = st.session_state.get(f"refresh_ts_{selected_date}")
-    if _last_ts:
-        _age_s = (datetime.now() - _last_ts).total_seconds()
-        _age_str = f"{int(_age_s/60)}m ago" if _age_s < 3600 else f"{int(_age_s/3600)}h ago"
-        _ts_col.caption(f"🕐 Updated {_age_str}")
-    elif _pred_path.exists():
-        _ts_col.caption("🕐 From cache")
+    _radio_col, _btn_col = st.columns([5, 1])
+    with _radio_col:
+        selected_date = st.radio(
+            "date_range", options=date_opts,
+            format_func=lambda d: day_names[date_opts.index(d)],
+            horizontal=True, label_visibility="collapsed",
+        )
+    with _btn_col:
+        st.markdown('<div style="margin-top:4px"></div>', unsafe_allow_html=True)
+        _refresh_clicked = st.button("🔄 Refresh", use_container_width=True)
 
-    # Auto-refresh once per session per date (replaces GitHub Actions morning run)
+    _pred_path = LOG_DIR / f"predictions_{selected_date}.csv"
+    _last_ts   = st.session_state.get(f"refresh_ts_{selected_date}")
+    if _last_ts:
+        _age_s   = (datetime.now() - _last_ts).total_seconds()
+        _age_str = f"{int(_age_s/60)}m ago" if _age_s < 3600 else f"{int(_age_s/3600)}h ago"
+        st.caption(f"{date.fromisoformat(selected_date).strftime('%A, %B %d, %Y')}  ·  🕐 Updated {_age_str}")
+    else:
+        st.caption(date.fromisoformat(selected_date).strftime("%A, %B %d, %Y")
+                   + ("  ·  🕐 From cache" if _pred_path.exists() else ""))
+
+    # Auto-refresh once per session per date
     _session_key = f"predicted_{selected_date}"
     if _session_key not in st.session_state:
         st.session_state[_session_key] = False
@@ -481,20 +489,18 @@ if page == "🏀 Today's Predictions":
         st.session_state[_session_key] = True
         st.session_state[f"refresh_ts_{selected_date}"] = datetime.now()
 
-    _, col_b = st.columns([4, 1])
-    with col_b:
-        if st.button("🔄 Refresh / Generate", use_container_width=True):
-            st.cache_data.clear()
-            st.session_state[_session_key] = False
-            try:
-                from src.predict import predict_today, get_current_season
-                result = predict_today(target_date=selected_date,
-                                       season=get_current_season(selected_date))
-                st.session_state[f"refresh_ts_{selected_date}"] = datetime.now()
-                st.success(f"Updated! {len(result)} games." if result is not None and not result.empty
-                           else "No games found.")
-            except Exception as e:
-                st.error(str(e))
+    if _refresh_clicked:
+        st.cache_data.clear()
+        st.session_state[_session_key] = False
+        try:
+            from src.predict import predict_today, get_current_season
+            result = predict_today(target_date=selected_date,
+                                   season=get_current_season(selected_date))
+            st.session_state[f"refresh_ts_{selected_date}"] = datetime.now()
+            st.success(f"Updated — {len(result)} games." if result is not None and not result.empty
+                       else "No games found.")
+        except Exception as e:
+            st.error(str(e))
 
     preds      = load_predictions_for_date(selected_date)
     raw_odds   = load_raw_odds_for_date(selected_date)
@@ -622,23 +628,24 @@ if page == "🏀 Today's Predictions":
 </div>""", unsafe_allow_html=True)
 
                 with st.container():
-                    lc1, lc2, lc3 = st.columns([2, 2, 2])
+                    lc1, lc2, lc3 = st.columns([2, 2, 1])
                     with lc1:
                         default_units = float(_all_bets[existing_idx].get("units", 1.0)) if already_logged else 1.0
                         log_units = st.number_input(
-                            "Units to bet", min_value=0.1, max_value=100.0,
+                            "Units", min_value=0.1, max_value=100.0,
                             value=default_units, step=0.5,
                             key=f"units_{home}_{away}",
                         )
                     with lc2:
+                        st.markdown('<div style="margin-top:26px"></div>', unsafe_allow_html=True)
                         if already_logged:
-                            st.success("✅ Logged")
-                            if st.button("🔄 Update units", key=f"upd_{home}_{away}"):
+                            if st.button("🔄 Update", key=f"upd_{home}_{away}", use_container_width=True):
                                 _all_bets[existing_idx]["units"] = log_units
                                 save_bets(_all_bets)
                                 st.rerun()
+                            st.caption("✅ Already logged")
                         else:
-                            if st.button(f"✅ Log — {bet_team}", key=f"log_{home}_{away}", type="primary"):
+                            if st.button(f"✅ Log {bet_team}", key=f"log_{home}_{away}", type="primary", use_container_width=True):
                                 _all_bets.append({
                                     "date": selected_date, "home_team": home, "away_team": away,
                                     "bet_team": bet_team, "bet_odds": odds_str, "edge_pct": edge_str,
@@ -648,11 +655,12 @@ if page == "🏀 Today's Predictions":
                                 st.rerun()
                     with lc3:
                         if already_logged:
-                            if st.button("🗑️ Unlog", key=f"unlog_{home}_{away}"):
+                            st.markdown('<div style="margin-top:26px"></div>', unsafe_allow_html=True)
+                            if st.button("🗑️", key=f"unlog_{home}_{away}", use_container_width=True):
                                 _all_bets.pop(existing_idx)
                                 save_bets(_all_bets)
                                 st.rerun()
-                    st.divider()
+                    st.markdown('<div style="margin-bottom:6px"></div>', unsafe_allow_html=True)
 
         # ── All games ─────────────────────────────────────────────────────────
         st.subheader("All Games")
@@ -735,57 +743,61 @@ if page == "🏀 Today's Predictions":
   {_odds_row}
 </div>""", unsafe_allow_html=True)
 
-            # ── Model breakdown + all books ───────────────────────────────────
-            with st.expander("📊 Breakdown & odds"):
-                dc1, dc2 = st.columns(2)
-                with dc1:
-                    st.caption("**Model signals**")
-                    h_streak = int(row.get("home_streak", 0) or 0)
-                    a_streak = int(row.get("away_streak", 0) or 0)
-                    _h_str = f"W{h_streak}" if h_streak > 0 else f"L{abs(h_streak)}" if h_streak < 0 else "—"
-                    _a_str = f"W{a_streak}" if a_streak > 0 else f"L{abs(a_streak)}" if a_streak < 0 else "—"
-                    _h_b2b = " ⚠️ B2B" if row.get("home_b2b") else ""
-                    _a_b2b = " ⚠️ B2B" if row.get("away_b2b") else ""
-                    def _inj_str(val):
-                        s = str(val) if val is not None else ""
-                        return "" if s.lower() in ("none", "nan", "") else s
-                    _h_inj = _inj_str(row.get("home_injuries"))
-                    _a_inj = _inj_str(row.get("away_injuries"))
-                    _inj_lines = ""
-                    if _h_inj:
-                        _inj_lines += f"🚑 {home} OUT: {_h_inj}  \n"
-                    if _a_inj:
-                        _inj_lines += f"🚑 {away} OUT: {_a_inj}  \n"
-                    st.markdown(
-                        f"Elo diff: **{elo:+.0f}**  \n"
-                        f"Streak: {home} **{_h_str}** / {away} **{_a_str}**  \n"
-                        f"{home}{_h_b2b} / {away}{_a_b2b}  \n"
-                        + (_inj_lines if _inj_lines else "No reported injuries  \n") +
-                        f"Injury impact: {home} **{home_imp:.0%}** / {away} **{away_imp:.0%}**"
-                    )
-                with dc2:
-                    st.caption("**All books**")
-                    _raw_g = next((g for g in raw_odds
-                                   if g.get("home_team","").upper()==home.upper()
-                                   and g.get("away_team","").upper()==away.upper()), {})
-                    _books = _raw_g.get("bookmakers", {})
-                    if _books:
-                        _BOOK_LABELS = {
-                            "pinnacle":"Pinnacle","draftkings":"DraftKings",
-                            "fanduel":"FanDuel","betfair_ex_eu":"Betfair",
-                            "unibet_uk":"Unibet","betsson":"Betsson","nordicbet":"NordicBet",
-                        }
-                        for bk, bv in _books.items():
-                            bh_val = bv.get("home"); ba_val = bv.get("away")
-                            if not bh_val or not ba_val or abs(bh_val) >= 5000 or abs(ba_val) >= 5000:
-                                continue  # skip invalid/placeholder lines
-                            bname = _BOOK_LABELS.get(bk, bk)
-                            bh = fmt_ml(bh_val); ba = fmt_ml(ba_val)
-                            st.markdown(f"<span style='color:#aaa;font-size:12px'>{bname}:</span> "
-                                        f"**{home} {bh}** / **{away} {ba}**",
-                                        unsafe_allow_html=True)
-                    else:
-                        st.caption("No book data")
+            # ── Model breakdown ───────────────────────────────────────────────
+            with st.expander("📊 Breakdown"):
+                h_streak = int(row.get("home_streak", 0) or 0)
+                a_streak = int(row.get("away_streak", 0) or 0)
+                _h_str   = f"W{h_streak}" if h_streak > 0 else (f"L{abs(h_streak)}" if h_streak < 0 else "—")
+                _a_str   = f"W{a_streak}" if a_streak > 0 else (f"L{abs(a_streak)}" if a_streak < 0 else "—")
+                _s_color = lambda s: "#00c896" if s.startswith("W") else ("#ff4b4b" if s.startswith("L") else "#888")
+
+                def _inj_str(val):
+                    s = str(val) if val is not None else ""
+                    return "" if s.lower() in ("none", "nan", "") else s
+                _h_inj = _inj_str(row.get("home_injuries"))
+                _a_inj = _inj_str(row.get("away_injuries"))
+
+                def _inj_pills(inj_str):
+                    if not inj_str:
+                        return '<span style="color:#555;font-size:12px">None</span>'
+                    pills = []
+                    for p in inj_str.split(", "):
+                        color = "#ff4b4b" if "Out" in p else "#f5a623"
+                        pills.append(f'<span style="background:rgba(255,255,255,0.07);color:{color};font-size:11px;padding:2px 8px;border-radius:10px;margin:2px 2px 2px 0;display:inline-block">{p}</span>')
+                    return "".join(pills)
+
+                _h_b2b_warn = '<span style="color:#f5a623;font-size:11px"> ⚠️ B2B</span>' if row.get("home_b2b") else ""
+                _a_b2b_warn = '<span style="color:#f5a623;font-size:11px"> ⚠️ B2B</span>' if row.get("away_b2b") else ""
+
+                st.markdown(f"""
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;padding:4px 0">
+  <div>
+    <div style="color:#555;font-size:10px;text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px">Home — {home}{_h_b2b_warn}</div>
+    <div style="display:flex;gap:20px;margin-bottom:10px">
+      <div><div style="color:#666;font-size:10px;text-transform:uppercase">Streak</div>
+           <div style="font-weight:700;color:{_s_color(_h_str)};font-size:15px">{_h_str}</div></div>
+      <div><div style="color:#666;font-size:10px;text-transform:uppercase">Elo</div>
+           <div style="font-weight:700;font-size:15px">{elo:+.0f}</div></div>
+      <div><div style="color:#666;font-size:10px;text-transform:uppercase">Inj. impact</div>
+           <div style="font-weight:700;font-size:15px;color:{"#ff4b4b" if home_imp > 0.1 else "#eee"}">{home_imp:.0%}</div></div>
+    </div>
+    <div style="color:#666;font-size:10px;text-transform:uppercase;margin-bottom:4px">Injuries</div>
+    <div>{_inj_pills(_h_inj)}</div>
+  </div>
+  <div>
+    <div style="color:#555;font-size:10px;text-transform:uppercase;letter-spacing:.6px;margin-bottom:8px">Away — {away}{_a_b2b_warn}</div>
+    <div style="display:flex;gap:20px;margin-bottom:10px">
+      <div><div style="color:#666;font-size:10px;text-transform:uppercase">Streak</div>
+           <div style="font-weight:700;color:{_s_color(_a_str)};font-size:15px">{_a_str}</div></div>
+      <div><div style="color:#666;font-size:10px;text-transform:uppercase">Elo</div>
+           <div style="font-weight:700;font-size:15px">{-elo:+.0f}</div></div>
+      <div><div style="color:#666;font-size:10px;text-transform:uppercase">Inj. impact</div>
+           <div style="font-weight:700;font-size:15px;color:{"#ff4b4b" if away_imp > 0.1 else "#eee"}">{away_imp:.0%}</div></div>
+    </div>
+    <div style="color:#666;font-size:10px;text-transform:uppercase;margin-bottom:4px">Injuries</div>
+    <div>{_inj_pills(_a_inj)}</div>
+  </div>
+</div>""", unsafe_allow_html=True)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
