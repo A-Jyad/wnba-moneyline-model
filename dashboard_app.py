@@ -318,10 +318,26 @@ if page == "🏀 Today's Predictions":
     )
     st.caption(date.fromisoformat(selected_date).strftime("%A, %B %d, %Y"))
 
+    # Auto-refresh once per session per date (replaces GitHub Actions morning run)
+    _session_key = f"predicted_{selected_date}"
+    if _session_key not in st.session_state:
+        st.session_state[_session_key] = False
+    if not st.session_state[_session_key]:
+        with st.spinner("Fetching latest predictions and odds..."):
+            try:
+                from src.predict import predict_today, get_current_season
+                predict_today(target_date=selected_date,
+                              season=get_current_season(selected_date))
+                st.cache_data.clear()
+            except Exception:
+                pass
+        st.session_state[_session_key] = True
+
     _, col_b = st.columns([4, 1])
     with col_b:
         if st.button("🔄 Refresh / Generate", use_container_width=True):
             st.cache_data.clear()
+            st.session_state[_session_key] = False  # allow auto-refresh again next open
             try:
                 from src.predict import predict_today, get_current_season
                 result = predict_today(target_date=selected_date,
@@ -543,6 +559,33 @@ if page == "🏀 Today's Predictions":
                         st.caption("No odds")
                 except:
                     st.caption("No odds")
+
+    # ── Pinnacle odds board (all games from Odds API) ─────────────────────────
+    st.divider()
+    pinn_games = [g for g in raw_odds if g.get("bookmakers", {}).get("pinnacle")]
+    with st.expander(f"📊 Pinnacle Odds — {len(pinn_games)} game{'s' if len(pinn_games) != 1 else ''}", expanded=True):
+        if not pinn_games:
+            st.caption("No Pinnacle lines available for this date.")
+        else:
+            for g in pinn_games:
+                ht = g.get("home_team", "?")
+                at = g.get("away_team", "?")
+                pinn = g["bookmakers"]["pinnacle"]
+                h_ml = pinn.get("home"); a_ml = pinn.get("away")
+                commence = g.get("commence_time", "")
+                c1, c2, c3 = st.columns([3, 2, 2])
+                with c1:
+                    st.markdown(f"**{ht}** vs **{at}**")
+                    if commence:
+                        try:
+                            dt = datetime.fromisoformat(commence.replace("Z", "+00:00"))
+                            st.caption(dt.strftime("%b %d  %H:%M UTC"))
+                        except:
+                            pass
+                with c2:
+                    st.markdown(f"🏠 **{fmt_ml(h_ml)}**" if h_ml else "—")
+                with c3:
+                    st.markdown(f"✈️ **{fmt_ml(a_ml)}**" if a_ml else "—")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE 2: FILTER PLAYGROUND

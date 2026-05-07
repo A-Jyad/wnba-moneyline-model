@@ -150,9 +150,13 @@ def parse_odds_api(data: list[dict], filter_date: str | None = None) -> list[dic
         away_abbr = ODDS_API_TEAM_MAP.get(away_full, away_full[:3].upper())
         commence  = game.get("commence_time", "")
 
-        # Filter by date if requested (convert UTC commence_time to local date)
+        # Filter by date using Eastern time (WNBA schedule dates are ET; Odds API is UTC)
+        # EDT = UTC-4 (May–Oct, covers full WNBA season)
         if filter_date and commence:
-            game_date = datetime.fromisoformat(commence.replace("Z", "+00:00")).strftime("%Y-%m-%d")
+            from datetime import timezone, timedelta as _td
+            utc_dt   = datetime.fromisoformat(commence.replace("Z", "+00:00"))
+            east_dt  = utc_dt.astimezone(timezone(timedelta(hours=-4)))
+            game_date = east_dt.strftime("%Y-%m-%d")
             if game_date != filter_date:
                 continue
 
