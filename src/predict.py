@@ -146,7 +146,7 @@ def predict_today(
 
     # Build Elo
     elo = EloSystem()
-    if (CACHE_DIR / "wnba_elo_state.json").exists():
+    if (CACHE_DIR / "elo_state.json").exists():
         elo.load()
     elif not rolled.empty:
         log.info("No Elo cache — recomputing from game log...")

@@ -2,6 +2,8 @@
 data/raw/
 data/cache/
 data/odds/
+!data/raw/all_game_logs.parquet
+!data/cache/elo_state.json
 
 # Python
 __pycache__/
