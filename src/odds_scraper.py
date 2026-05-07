@@ -155,7 +155,7 @@ def parse_odds_api(data: list[dict], filter_date: str | None = None) -> list[dic
         if filter_date and commence:
             from datetime import timezone, timedelta as _td
             utc_dt   = datetime.fromisoformat(commence.replace("Z", "+00:00"))
-            east_dt  = utc_dt.astimezone(timezone(timedelta(hours=-4)))
+            east_dt  = utc_dt.astimezone(timezone(_td(hours=-4)))
             game_date = east_dt.strftime("%Y-%m-%d")
             if game_date != filter_date:
                 continue
