@@ -18,6 +18,7 @@ wnba_model/
 logs/*.log
 logs/update_log.json
 logs/pipeline.log
+logs/predictions_*.csv
 
 # OS
 .DS_Store

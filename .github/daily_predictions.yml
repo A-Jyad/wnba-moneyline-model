@@ -43,16 +43,15 @@ jobs:
         env:
           PYTHONPATH: .
 
-      - name: Commit predictions and updated data
+      - name: Commit updated data files
         run: |
           git config --global user.name "WNBA Model Bot"
           git config --global user.email "bot@wnba-model.com"
-          git add -f logs/predictions_*.csv
           git add -f data/raw/all_game_logs.parquet
           git add -f data/cache/elo_state.json
           git add -f data/cache/player_logs_2025.parquet
           git add -f config/settings.py
-          git diff --staged --quiet || git commit -m "Auto predictions + data update $(date +'%Y-%m-%d')"
+          git diff --staged --quiet || git commit -m "Auto data update $(date +'%Y-%m-%d')"
           git push
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
