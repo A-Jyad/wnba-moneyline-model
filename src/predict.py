@@ -195,6 +195,11 @@ def predict_today(
     except Exception as e:
         log.warning(f"Player logs load failed: {e}")
 
+    if not rolled.empty and player_df is not None:
+        from src.features import build_lineup_injury_features, build_team_strength_features
+        rolled = build_lineup_injury_features(rolled, player_df)
+        rolled = build_team_strength_features(rolled)
+
     today_ts = pd.Timestamp(target_date)
 
     # Fetch live odds
@@ -251,18 +256,18 @@ def predict_today(
                     # Base feature row from rolling stats
                     row_dict = {}
                     for col in feat_cols:
-                        if col.startswith("HOME_"):
+                        if col == "HOME_ELO_PRE":
+                            row_dict[col] = elo.get_rating(home)
+                        elif col == "AWAY_ELO_PRE":
+                            row_dict[col] = elo.get_rating(away)
+                        elif col in ("ELO_DIFF", "DIFF_ELO_PRE"):
+                            row_dict[col] = elo.get_rating(home) - elo.get_rating(away)
+                        elif col.startswith("HOME_"):
                             row_dict[col] = h_last.get(col[5:], 0)
                         elif col.startswith("AWAY_"):
                             row_dict[col] = a_last.get(col[5:], 0)
                         elif col.startswith("DIFF_"):
                             row_dict[col] = h_last.get(col[5:], 0) - a_last.get(col[5:], 0)
-                        elif col == "ELO_DIFF":
-                            row_dict[col] = elo.get_rating(home) - elo.get_rating(away)
-                        elif col == "HOME_ELO_PRE":
-                            row_dict[col] = elo.get_rating(home)
-                        elif col == "AWAY_ELO_PRE":
-                            row_dict[col] = elo.get_rating(away)
                         else:
                             row_dict[col] = 0
 
