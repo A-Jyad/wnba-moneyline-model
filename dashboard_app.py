@@ -442,12 +442,17 @@ except Exception:
 if page == "🏀 Today's Predictions":
     from datetime import timedelta, timezone as _tz
 
-    # Use Malaysia Time (UTC+8) so dates are always correct for the client
-    _MYT     = _tz(timedelta(hours=8))
-    today    = datetime.now(_MYT).date()
-    date_opts = [(today + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(8)]
+    # WNBA games tip off 7 PM+ ET = next calendar day in MYT (UTC+8).
+    # date_opts holds the US/schedule dates used for prediction files.
+    # day_names shows the MYT date the user will actually watch the game.
+    _MYT      = _tz(timedelta(hours=8))
+    today_myt = datetime.now(_MYT).date()
+    today_us  = today_myt - timedelta(days=1)   # US game date ≡ MYT date − 1
+
+    date_opts = [(today_us  + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(8)]
+    myt_dates = [(today_myt + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(8)]
     day_names = (["Today", "Tomorrow"]
-                 + [(today + timedelta(days=i)).strftime("%a %b %d") for i in range(2, 8)])
+                 + [(today_myt + timedelta(days=i)).strftime("%a %b %d") for i in range(2, 8)])
 
     # ── Header: title + date selector + refresh button in one row ────────────
     st.title("🏀 WNBA Predictions")
@@ -463,15 +468,16 @@ if page == "🏀 Today's Predictions":
         st.markdown('<div style="margin-top:4px"></div>', unsafe_allow_html=True)
         _refresh_clicked = st.button("🔄 Refresh", use_container_width=True)
 
-    _pred_path = LOG_DIR / f"predictions_{selected_date}.csv"
-    _last_ts   = st.session_state.get(f"refresh_ts_{selected_date}")
+    # Display MYT date in caption (US date + 1)
+    _myt_display = (date.fromisoformat(selected_date) + timedelta(days=1)).strftime("%A, %B %d, %Y")
+    _pred_path   = LOG_DIR / f"predictions_{selected_date}.csv"
+    _last_ts     = st.session_state.get(f"refresh_ts_{selected_date}")
     if _last_ts:
         _age_s   = (datetime.now() - _last_ts).total_seconds()
         _age_str = f"{int(_age_s/60)}m ago" if _age_s < 3600 else f"{int(_age_s/3600)}h ago"
-        st.caption(f"{date.fromisoformat(selected_date).strftime('%A, %B %d, %Y')}  ·  🕐 Updated {_age_str}")
+        st.caption(f"{_myt_display} MYT  ·  🕐 Updated {_age_str}")
     else:
-        st.caption(date.fromisoformat(selected_date).strftime("%A, %B %d, %Y")
-                   + ("  ·  🕐 From cache" if _pred_path.exists() else ""))
+        st.caption(_myt_display + " MYT" + ("  ·  🕐 From cache" if _pred_path.exists() else ""))
 
     # Auto-refresh once per session per date
     _session_key = f"predicted_{selected_date}"
