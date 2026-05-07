@@ -14,6 +14,7 @@ wnba_model/
 # Logs (generated at runtime)
 logs/*.log
 logs/update_log.json
+logs/backtest_*.csv
 
 # OS
 .DS_Store

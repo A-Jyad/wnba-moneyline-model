@@ -1,0 +1,5 @@
+game_id,date,home_team,away_team,p_home_win,p_away_win,elo_home,elo_away,elo_diff,home_b2b,away_b2b,home_streak,away_streak,home_injuries,away_injuries,home_players_out,away_players_out,home_injury_impact,away_injury_impact,injury_impact_diff,home_ml,away_ml,edge_home_pct,edge_away_pct,has_edge,kelly_units,recommendation
+1022600007,2026-05-10,CON,SEA,0.1883,0.8117,1409.0,1507.1,-98.1,False,False,-1,1,None,None,0,0,0.0,0.0,0.0,,,,,False,0,No odds available — model only
+1022600008,2026-05-10,WAS,NYL,0.1288,0.8712,1393.8,1576.1,-182.3,False,False,6,1,None,None,0,0,0.0,0.0,0.0,,,,,False,0,No odds available — model only
+1022600009,2026-05-10,LAS,LVA,0.2061,0.7939,1473.1,1655.5,-182.4,False,False,-7,-3,None,None,0,0,0.0,0.0,0.0,,,,,False,0,No odds available — model only
+1022600011,2026-05-10,GSV,PHX,0.3244,0.6756,1511.6,1535.3,-23.6,False,False,-1,1,None,None,0,0,0.0,0.0,0.0,,,,,False,0,No odds available — model only

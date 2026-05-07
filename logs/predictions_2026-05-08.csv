@@ -1,4 +1,4 @@
 game_id,date,home_team,away_team,p_home_win,p_away_win,elo_home,elo_away,elo_diff,home_b2b,away_b2b,home_streak,away_streak,home_injuries,away_injuries,home_players_out,away_players_out,home_injury_impact,away_injury_impact,injury_impact_diff,home_ml,away_ml,edge_home_pct,edge_away_pct,has_edge,kelly_units,recommendation
 1022600001,2026-05-08,NYL,CON,0.5478,0.4522,1576.1,1409.0,167.1,False,False,1,-1,None,None,0,0,0.0,0.0,0.0,-1547.0,793.0,-34.57,34.57,False,0.0,NO BET — insufficient edge
-1022600002,2026-05-08,TOR,WAS,0.5,0.5,1500.0,1393.8,106.2,False,False,0,6,None,None,0,0,0.0,0.0,0.0,-127.0,101.0,-2.93,2.93,False,0.0,NO BET — insufficient edge
+1022600002,2026-05-08,TOR,WAS,0.5,0.5,1500.0,1393.8,106.2,False,False,0,6,None,None,0,0,0.0,0.0,0.0,-126.0,-101.0,-2.6,2.6,False,0.0,NO BET — insufficient edge
 1022600003,2026-05-08,SEA,GSV,0.4117,0.5883,1507.1,1511.6,-4.6,False,False,1,-1,None,None,0,0,0.0,0.0,0.0,,,,,False,0.0,No odds available — model only

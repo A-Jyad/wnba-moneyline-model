@@ -33,16 +33,21 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run predictions
-        run: python predict.py
+      - name: Run predictions for next 7 days
+        run: |
+          for i in 0 1 2 3 4 5 6; do
+            TARGET=$(date -d "+${i} days" +'%Y-%m-%d')
+            echo "--- Predicting $TARGET ---"
+            python predict.py --date $TARGET || echo "No games for $TARGET"
+          done
         env:
           PYTHONPATH: .
 
-      - name: Commit predictions CSV
+      - name: Commit predictions CSVs
         run: |
           git config --global user.name "WNBA Model Bot"
           git config --global user.email "bot@wnba-model.com"
-          git add logs/predictions_*.csv
+          git add -f logs/predictions_*.csv
           git diff --staged --quiet || git commit -m "Auto predictions $(date +'%Y-%m-%d')"
           git push
         env:

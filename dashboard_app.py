@@ -330,6 +330,7 @@ if page == "🏀 Today's Predictions":
                            else "No games found.")
             except Exception as e:
                 st.error(str(e))
+            st.rerun()
 
     preds      = load_predictions_for_date(selected_date)
     raw_odds   = load_raw_odds_for_date(selected_date)
