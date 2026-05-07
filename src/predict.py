@@ -95,18 +95,27 @@ def _update_elo_from_season(elo: "EloSystem", raw: pd.DataFrame, season: str) ->
         return
 
     paired = paired.sort_values("GAME_DATE")
-    for _, row in paired.iterrows():
+
+    # Only process games not already reflected in the saved Elo state
+    new_games = paired[~paired["GAME_ID"].astype(str).isin(elo._processed_game_ids)]
+    if new_games.empty:
+        log.info(f"Elo already up-to-date for {season} ({len(paired)} games already processed)")
+        return
+
+    for _, row in new_games.iterrows():
+        gid = str(row["GAME_ID"])
         elo.update(
             home_team = str(row["TEAM_ABBREVIATION"]),
             away_team = str(row["AWAY_TEAM"]),
             home_won  = 1 if row["WL"] == "W" else 0,
             season    = str(season),
             game_date = str(row["GAME_DATE"]),
-            game_id   = str(row["GAME_ID"]),
+            game_id   = gid,
         )
+        elo._processed_game_ids.add(gid)
 
     elo.save()
-    log.info(f"Elo updated from {len(paired)} completed {season} games → saved")
+    log.info(f"Elo updated: +{len(new_games)} new {season} games → {len(elo._processed_game_ids)} total processed")
 
 
 def get_current_season(target_date: str | None = None) -> str:

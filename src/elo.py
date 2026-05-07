@@ -47,6 +47,7 @@ class EloSystem:
         self.ratings: dict[str, float] = {}
         self.history: list[dict] = []
         self._current_season: str | None = None
+        self._processed_game_ids: set = set()
 
         # Convert home court point advantage to Elo scale
         # ~3 points ≈ 45 Elo points at NBA pace
@@ -149,6 +150,7 @@ class EloSystem:
             "ratings": self.ratings,
             "current_season": self._current_season,
             "games_processed": len(self.history),
+            "processed_game_ids": sorted(self._processed_game_ids),
         }
         with open(path, "w") as f:
             json.dump(state, f, indent=2)
@@ -160,7 +162,9 @@ class EloSystem:
                 state = json.load(f)
             self.ratings = state.get("ratings", {})
             self._current_season = state.get("current_season")
-            log.info(f"Elo state loaded: {len(self.ratings)} teams, season={self._current_season}")
+            self._processed_game_ids = set(state.get("processed_game_ids", []))
+            log.info(f"Elo state loaded: {len(self.ratings)} teams, season={self._current_season}, "
+                     f"{len(self._processed_game_ids)} games already processed")
         else:
             log.info("No Elo state file found — starting fresh.")
         return self

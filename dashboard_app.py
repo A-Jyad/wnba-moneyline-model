@@ -68,21 +68,47 @@ def fmt_ml(ml):
 # ── Storage ───────────────────────────────────────────────────────────────────
 TRACKER_FILE = ROOT / "logs" / "bet_tracker.json"
 
+def _get_supabase():
+    """Return a Supabase client if SUPABASE_URL / SUPABASE_KEY are configured, else None."""
+    try:
+        url = st.secrets.get("SUPABASE_URL", "")
+        key = st.secrets.get("SUPABASE_KEY", "")
+        if not url or not key:
+            return None
+        from supabase import create_client
+        return create_client(url, key)
+    except Exception:
+        return None
+
 def load_bets():
+    # Try Supabase first (persists across Streamlit Cloud redeploys)
+    sb = _get_supabase()
+    if sb:
+        try:
+            res = sb.table("model_config").select("value").eq("key", "bets").execute()
+            if res.data:
+                return res.data[0]["value"] or []
+        except Exception:
+            pass
+    # JSON fallback (local dev or if Supabase not yet configured)
     if TRACKER_FILE.exists():
         try:
             with open(TRACKER_FILE) as f:
                 return json.load(f)
         except (json.JSONDecodeError, IOError):
-            # Back up corrupted file before returning empty
             import shutil
             shutil.copy(TRACKER_FILE, str(TRACKER_FILE) + ".bak")
-            return []
     return []
 
 def save_bets(bets):
-    # Atomic write: write to temp then rename to avoid partial writes
-    import tempfile, os
+    # Persist to Supabase when configured
+    sb = _get_supabase()
+    if sb:
+        try:
+            sb.table("model_config").upsert({"key": "bets", "value": bets}).execute()
+        except Exception:
+            pass
+    # Always write JSON backup (atomic write to avoid partial files)
     tmp = str(TRACKER_FILE) + ".tmp"
     with open(tmp, "w") as f:
         json.dump(bets, f, indent=2, default=str)
