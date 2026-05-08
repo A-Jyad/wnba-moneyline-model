@@ -98,12 +98,12 @@ VIG_REMOVE_METHOD= "multiplicative"  # "additive" or "multiplicative"
 # - No min odds filter (WNBA away underdogs often at +110-+140)
 # Optimizer result: 72 bets, 50% WR, +16.2% ROI on clean seasons
 # ~36 bets/season (~1-2 per week during May-October)
-MIN_EDGE_PCT       = 15.0
+MIN_EDGE_PCT       = 12.0
 BET_MAX_EDGE       = 60.0
-BET_MIN_ODDS       = 120
-BET_MAX_ODDS       = 325
-BET_UNDERDOGS_ONLY = True  
-BET_AWAY_ONLY      = True
+BET_MIN_ODDS       = 105
+BET_MAX_ODDS       = 300
+BET_UNDERDOGS_ONLY = False  
+BET_AWAY_ONLY      = False
 
 KELLY_FRACTION     = 0.25
 MAX_BET_PCT        = 3.0
