@@ -336,78 +336,87 @@ def predict_today(
                 home_feats = rolled[rolled["TEAM_ABBREVIATION"] == home]
                 away_feats = rolled[rolled["TEAM_ABBREVIATION"] == away]
 
-                if not home_feats.empty and not away_feats.empty:
+                # For expansion teams with no history, fall back to league average
+                league_avg = rolled.groupby("TEAM_ABBREVIATION").last().mean()
+                if home_feats.empty:
+                    log.warning(f"No rolling stats for {home} — using league average")
+                    h_last = league_avg
+                else:
                     h_last = home_feats.iloc[-1]
+                if away_feats.empty:
+                    log.warning(f"No rolling stats for {away} — using league average")
+                    a_last = league_avg
+                else:
                     a_last = away_feats.iloc[-1]
 
-                    # Base feature row from rolling stats
-                    row_dict = {}
-                    for col in feat_cols:
-                        if col == "HOME_ELO_PRE":
-                            row_dict[col] = elo.get_rating(home)
-                        elif col == "AWAY_ELO_PRE":
-                            row_dict[col] = elo.get_rating(away)
-                        elif col in ("ELO_DIFF", "DIFF_ELO_PRE"):
-                            row_dict[col] = elo.get_rating(home) - elo.get_rating(away)
-                        elif col.startswith("HOME_"):
-                            row_dict[col] = h_last.get(col[5:], 0)
-                        elif col.startswith("AWAY_"):
-                            row_dict[col] = a_last.get(col[5:], 0)
-                        elif col.startswith("DIFF_"):
-                            row_dict[col] = h_last.get(col[5:], 0) - a_last.get(col[5:], 0)
-                        else:
-                            row_dict[col] = 0
+                # Base feature row from rolling stats
+                row_dict = {}
+                for col in feat_cols:
+                    if col == "HOME_ELO_PRE":
+                        row_dict[col] = elo.get_rating(home)
+                    elif col == "AWAY_ELO_PRE":
+                        row_dict[col] = elo.get_rating(away)
+                    elif col in ("ELO_DIFF", "DIFF_ELO_PRE"):
+                        row_dict[col] = elo.get_rating(home) - elo.get_rating(away)
+                    elif col.startswith("HOME_"):
+                        row_dict[col] = h_last.get(col[5:], 0)
+                    elif col.startswith("AWAY_"):
+                        row_dict[col] = a_last.get(col[5:], 0)
+                    elif col.startswith("DIFF_"):
+                        row_dict[col] = h_last.get(col[5:], 0) - a_last.get(col[5:], 0)
+                    else:
+                        row_dict[col] = 0
 
-                    # Override injury features with ESPN live data
-                    pdf_prior = (
-                        player_df[player_df["GAME_DATE"] < today_ts]
-                        if player_df is not None and "GAME_DATE" in player_df.columns
-                        else player_df
-                    )
-                    home_baseline = float(h_last.get("lineup_strength_avg10") or 0)
-                    away_baseline = float(a_last.get("lineup_strength_avg10") or 0)
+                # Override injury features with ESPN live data
+                pdf_prior = (
+                    player_df[player_df["GAME_DATE"] < today_ts]
+                    if player_df is not None and "GAME_DATE" in player_df.columns
+                    else player_df
+                )
+                home_baseline = float(h_last.get("lineup_strength_avg10") or 0)
+                away_baseline = float(a_last.get("lineup_strength_avg10") or 0)
 
-                    def _fallback_baseline(team: str, pdf: pd.DataFrame) -> float:
-                        """Top-10 players' avg minutes sum — used when rolling feature is 0."""
-                        if pdf is None or pdf.empty:
-                            return 0.0
-                        tp = pdf[pdf["TEAM_ABBREVIATION"] == team].copy()
-                        if tp.empty or "MIN" not in tp.columns:
-                            return 0.0
-                        from src.features import _parse_minutes
-                        tp["MIN_FLOAT"] = tp["MIN"].apply(_parse_minutes)
-                        avgs = tp[tp["MIN_FLOAT"] > 0].groupby("PLAYER_NAME")["MIN_FLOAT"].mean()
-                        return float(avgs.nlargest(10).sum()) if len(avgs) > 0 else 0.0
+                def _fallback_baseline(team: str, pdf: pd.DataFrame) -> float:
+                    """Top-10 players' avg minutes sum — used when rolling feature is 0."""
+                    if pdf is None or pdf.empty:
+                        return 0.0
+                    tp = pdf[pdf["TEAM_ABBREVIATION"] == team].copy()
+                    if tp.empty or "MIN" not in tp.columns:
+                        return 0.0
+                    from src.features import _parse_minutes
+                    tp["MIN_FLOAT"] = tp["MIN"].apply(_parse_minutes)
+                    avgs = tp[tp["MIN_FLOAT"] > 0].groupby("PLAYER_NAME")["MIN_FLOAT"].mean()
+                    return float(avgs.nlargest(10).sum()) if len(avgs) > 0 else 0.0
 
-                    # Use full player_df (not pdf_prior) so early-season baseline works
-                    _pdf_for_impact = player_df if (player_df is not None and not player_df.empty) else pdf_prior
-                    if home_baseline <= 0 and _pdf_for_impact is not None:
-                        home_baseline = _fallback_baseline(home, _pdf_for_impact)
-                    if away_baseline <= 0 and _pdf_for_impact is not None:
-                        away_baseline = _fallback_baseline(away, _pdf_for_impact)
+                # Use full player_df (not pdf_prior) so early-season baseline works
+                _pdf_for_impact = player_df if (player_df is not None and not player_df.empty) else pdf_prior
+                if home_baseline <= 0 and _pdf_for_impact is not None:
+                    home_baseline = _fallback_baseline(home, _pdf_for_impact)
+                if away_baseline <= 0 and _pdf_for_impact is not None:
+                    away_baseline = _fallback_baseline(away, _pdf_for_impact)
 
-                    home_impact = (
-                        _espn_injury_impact(home_out, home, _pdf_for_impact, home_baseline)
-                        if home_baseline > 0 else 0.0
-                    )
-                    away_impact = (
-                        _espn_injury_impact(away_out, away, _pdf_for_impact, away_baseline)
-                        if away_baseline > 0 else 0.0
-                    )
-                    home_ts_adj = float(h_last.get("PLUS_MINUS_roll10") or 0) - 3.0 * home_impact
-                    away_ts_adj = float(a_last.get("PLUS_MINUS_roll10") or 0) - 3.0 * away_impact
+                home_impact = (
+                    _espn_injury_impact(home_out, home, _pdf_for_impact, home_baseline)
+                    if home_baseline > 0 else 0.0
+                )
+                away_impact = (
+                    _espn_injury_impact(away_out, away, _pdf_for_impact, away_baseline)
+                    if away_baseline > 0 else 0.0
+                )
+                home_ts_adj = float(h_last.get("PLUS_MINUS_roll10") or 0) - 3.0 * home_impact
+                away_ts_adj = float(a_last.get("PLUS_MINUS_roll10") or 0) - 3.0 * away_impact
 
-                    row_dict["HOME_estimated_injury_impact"] = home_impact
-                    row_dict["AWAY_estimated_injury_impact"] = away_impact
-                    row_dict["DIFF_estimated_injury_impact"] = home_impact - away_impact
-                    row_dict["HOME_team_strength_adj"]       = home_ts_adj
-                    row_dict["AWAY_team_strength_adj"]       = away_ts_adj
-                    row_dict["DIFF_team_strength_adj"]       = home_ts_adj - away_ts_adj
+                row_dict["HOME_estimated_injury_impact"] = home_impact
+                row_dict["AWAY_estimated_injury_impact"] = away_impact
+                row_dict["DIFF_estimated_injury_impact"] = home_impact - away_impact
+                row_dict["HOME_team_strength_adj"]       = home_ts_adj
+                row_dict["AWAY_team_strength_adj"]       = away_ts_adj
+                row_dict["DIFF_team_strength_adj"]       = home_ts_adj - away_ts_adj
 
-                    X        = np.array([[row_dict.get(c, 0) for c in feat_cols]])
-                    elo_prob = np.array([elo.win_probability(home, away)])
-                    comps    = model.predict_proba_components(X, elo_prob)
-                    p_home   = float(np.asarray(model.blend(comps)).flat[0])
+                X        = np.nan_to_num(np.array([[row_dict.get(c, 0) for c in feat_cols]]), nan=0.0)
+                elo_prob = np.array([elo.win_probability(home, away)])
+                comps    = model.predict_proba_components(X, elo_prob)
+                p_home   = float(np.asarray(model.blend(comps)).flat[0])
 
             except Exception as e:
                 log.warning(f"Prediction failed for {home} vs {away}: {e}")
