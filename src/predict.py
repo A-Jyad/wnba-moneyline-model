@@ -336,16 +336,14 @@ def predict_today(
                 home_feats = rolled[rolled["TEAM_ABBREVIATION"] == home]
                 away_feats = rolled[rolled["TEAM_ABBREVIATION"] == away]
 
-                # For expansion teams with no history, fall back to league average
-                league_avg = rolled.groupby("TEAM_ABBREVIATION").last().mean()
                 if home_feats.empty:
                     log.warning(f"No rolling stats for {home} — using league average")
-                    h_last = league_avg
+                    h_last = rolled.groupby("TEAM_ABBREVIATION").last().mean(numeric_only=True)
                 else:
                     h_last = home_feats.iloc[-1]
                 if away_feats.empty:
                     log.warning(f"No rolling stats for {away} — using league average")
-                    a_last = league_avg
+                    a_last = rolled.groupby("TEAM_ABBREVIATION").last().mean(numeric_only=True)
                 else:
                     a_last = away_feats.iloc[-1]
 
