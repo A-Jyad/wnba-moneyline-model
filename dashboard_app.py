@@ -479,29 +479,35 @@ if page == "🏀 Today's Predictions":
     else:
         st.caption(_myt_display + " MYT" + ("  ·  🕐 From cache" if _pred_path.exists() else ""))
 
-    # Auto-refresh once per session per date
+    # Auto-refresh once per session per date, but only if the CSV is stale/missing
     _session_key = f"predicted_{selected_date}"
     if _session_key not in st.session_state:
         st.session_state[_session_key] = False
-    if not st.session_state[_session_key]:
+    _csv_age_s = (
+        (datetime.now() - datetime.fromtimestamp(_pred_path.stat().st_mtime)).total_seconds()
+        if _pred_path.exists() else float("inf")
+    )
+    if not st.session_state[_session_key] and _csv_age_s > 900:
         with st.spinner("Fetching latest predictions and odds..."):
             try:
                 from src.predict import predict_today, get_current_season
                 predict_today(target_date=selected_date,
                               season=get_current_season(selected_date))
-                st.cache_data.clear()
+                load_predictions_for_date.clear()
             except Exception:
                 pass
         st.session_state[_session_key] = True
         st.session_state[f"refresh_ts_{selected_date}"] = datetime.now()
+    elif not st.session_state[_session_key]:
+        st.session_state[_session_key] = True
 
     if _refresh_clicked:
-        st.cache_data.clear()
         st.session_state[_session_key] = False
         try:
             from src.predict import predict_today, get_current_season
             result = predict_today(target_date=selected_date,
                                    season=get_current_season(selected_date))
+            load_predictions_for_date.clear()
             st.session_state[f"refresh_ts_{selected_date}"] = datetime.now()
             st.success(f"Updated — {len(result)} games." if result is not None and not result.empty
                        else "No games found.")
