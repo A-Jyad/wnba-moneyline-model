@@ -267,22 +267,25 @@ def predict_today(
         log.warning(f"Injury report fetch failed: {e}")
         injury_df = pd.DataFrame(columns=["team", "player", "status", "TEAM_ABBREVIATION"])
 
-    # Load player game logs for minute-weighted injury impact
-    # Falls back to previous season if current season has no games yet
-    player_df = None
-    for _s in [season, str(int(season) - 1)]:
+    # Load player game logs — always combine current + previous season so that
+    # rolling windows (lineup_strength_avg10 etc.) are filled at season start.
+    _player_dfs = []
+    for _s in [str(int(season) - 1), season]:
         try:
-            raw_players = fetch_player_game_logs(_s, "Regular Season")
-            if not raw_players.empty:
-                player_df = raw_players.copy()
-                player_df.columns = player_df.columns.str.upper()
-                if "GAME_DATE" in player_df.columns:
-                    player_df["GAME_DATE"] = pd.to_datetime(player_df["GAME_DATE"])
-                log.info(f"Player logs loaded ({_s}): {len(player_df):,} rows")
-                break
+            _raw = fetch_player_game_logs(_s, "Regular Season")
+            if not _raw.empty:
+                _raw = _raw.copy()
+                _raw.columns = _raw.columns.str.upper()
+                if "GAME_DATE" in _raw.columns:
+                    _raw["GAME_DATE"] = pd.to_datetime(_raw["GAME_DATE"])
+                _player_dfs.append(_raw)
+                log.info(f"Player logs loaded ({_s}): {len(_raw):,} rows")
         except Exception as e:
             log.warning(f"Player logs load failed ({_s}): {e}")
-    if player_df is None:
+    if _player_dfs:
+        player_df = pd.concat(_player_dfs, ignore_index=True)
+    else:
+        player_df = None
         log.info("No player logs available — injury impact will default to 0")
 
     if not rolled.empty and player_df is not None:
