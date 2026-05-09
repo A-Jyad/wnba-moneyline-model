@@ -1,1 +1,13 @@
-[]
+[
+  {
+    "date": "2026-05-08",
+    "home_team": "SEA",
+    "away_team": "GSV",
+    "bet_team": "SEA",
+    "bet_odds": "+185",
+    "edge_pct": "25.0",
+    "result": "pending",
+    "units": 1.0,
+    "pnl": null
+  }
+]
