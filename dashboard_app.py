@@ -863,11 +863,15 @@ elif page == "🔬 Filter Playground":
         st.markdown("**Odds range**")
         min_odds_abs = st.slider("Min odds", 100, 200, saved_min_odds, step=5)
         max_odds     = st.slider("Max odds", 200, 1000, saved_max_odds, step=25)
-        underdogs_only = st.checkbox("Underdogs only", value=True)
+        try:
+            from config.settings import BET_UNDERDOGS_ONLY as _default_underdogs
+        except:
+            _default_underdogs = False
+        underdogs_only = st.checkbox("Underdogs only", value=_default_underdogs)
         try:
             from config.settings import BET_AWAY_ONLY as _default_away
         except:
-            _default_away = True
+            _default_away = False
         away_only = st.checkbox("Away bets only", value=_default_away,
                                 help="WNBA: home underdogs consistently lose. Away only = +38% ROI on clean seasons.")
     with col3:
@@ -888,9 +892,9 @@ elif page == "🔬 Filter Playground":
     filtered = apply_filters(raw, min_edge, max_edge, min_odds_filter,
                              max_odds, underdogs_only, selected_seasons, away_only=away_only)
     try:
-        from config.settings import MIN_EDGE_PCT, BET_MAX_ODDS, BET_MIN_ODDS, BET_MAX_EDGE, BET_AWAY_ONLY
+        from config.settings import MIN_EDGE_PCT, BET_MAX_ODDS, BET_MIN_ODDS, BET_MAX_EDGE, BET_AWAY_ONLY, BET_UNDERDOGS_ONLY
         current = apply_filters(raw, MIN_EDGE_PCT, BET_MAX_EDGE, BET_MIN_ODDS,
-                                BET_MAX_ODDS, True, selected_seasons, away_only=BET_AWAY_ONLY)
+                                BET_MAX_ODDS, BET_UNDERDOGS_ONLY, selected_seasons, away_only=BET_AWAY_ONLY)
     except:
         current = apply_filters(raw, 15, 55, 130, 250, True, selected_seasons, away_only=True)
 
@@ -988,7 +992,8 @@ elif page == "🔬 Filter Playground":
             cfg = re.sub(r"BET_MAX_ODDS\s*=\s*[\d.]+",  f"BET_MAX_ODDS       = {int(max_odds)}", cfg)
             cfg = re.sub(r"BET_MIN_ODDS\s*=\s*[\d.]+", f"BET_MIN_ODDS       = {int(min_odds_abs)}", cfg)
             cfg = re.sub(r"BET_MAX_EDGE\s*=\s*[\d.]+",  f"BET_MAX_EDGE       = {float(max_edge)}", cfg)
-            cfg = re.sub(r"BET_AWAY_ONLY\s*=.*",  f"BET_AWAY_ONLY      = {away_only}", cfg)
+            cfg = re.sub(r"BET_UNDERDOGS_ONLY\s*=.*", f"BET_UNDERDOGS_ONLY = {underdogs_only}", cfg)
+            cfg = re.sub(r"BET_AWAY_ONLY\s*=.*",     f"BET_AWAY_ONLY      = {away_only}", cfg)
             with open(cfg_path, "w") as f: f.write(cfg)
         except: pass
         st.success(f"✅ Saved! Min edge: {min_edge}%, Odds: +{min_odds_abs+1}–+{max_odds}")
