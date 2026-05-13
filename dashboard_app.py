@@ -27,6 +27,14 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+st.markdown("""
+<style>
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden;}
+</style>
+""", unsafe_allow_html=True)
+
 ROOT = Path(__file__).parent
 sys.path.insert(0, str(ROOT))
 (ROOT / "logs").mkdir(exist_ok=True)
@@ -95,6 +103,20 @@ def fmt_ml(ml):
     except (ValueError, TypeError):
         return str(ml)
 
+def fmt_odds(ml, fmt="American"):
+    """Format a moneyline (American int or string) into the requested display format."""
+    try:
+        v = float(str(ml).replace("+", ""))
+    except (ValueError, TypeError):
+        return str(ml)
+    if fmt == "Decimal":
+        dec = v / 100 + 1 if v > 0 else 100 / abs(v) + 1
+        return f"{dec:.2f}"
+    elif fmt == "Percentage":
+        pct = 100 / (v + 100) * 100 if v > 0 else abs(v) / (abs(v) + 100) * 100
+        return f"{pct:.1f}%"
+    return fmt_ml(v)
+
 def fmt_myt(commence_str: str) -> str:
     """Convert a UTC ISO-8601 commence_time string to Malaysia Time (UTC+8)."""
     from datetime import timezone, timedelta
@@ -159,13 +181,15 @@ CLOSING_BOOKS = {
 }
 
 BACKTEST_FILES = {
-    "2022": LOG_DIR / "backtest_real_2022.csv",
     "2023": LOG_DIR / "backtest_real_2023.csv",
     "2024": LOG_DIR / "backtest_real_2024.csv",
     "2025": LOG_DIR / "backtest_real_2025.csv",
+    "2026": LOG_DIR / "backtest_real_2026.csv",
 }
-CLEAN_SEASONS = ["2024", "2025"]
-VALID_SEASONS = ["2023"]
+# 2015–2023 = training | 2024 = validation (calibration) | 2025 = test (clean OOS)
+CLEAN_SEASONS  = ["2025"]
+VALID_SEASONS  = ["2024"]
+TRAIN_SEASONS  = ["2023"]
 
 @st.cache_data(ttl=3600)
 def load_all_backtest():
@@ -388,6 +412,7 @@ def annotate_all_games(df, min_edge, max_edge, min_odds, max_odds, underdogs_onl
 
     return pd.DataFrame(records)
 
+
 def summarise(df):
     if df.empty: return {"bets":0,"roi":0,"wr":0,"pnl":0,"be":0}
     wins = df["won"].sum(); total = len(df); pnl = df["pnl"].sum()
@@ -395,6 +420,7 @@ def summarise(df):
     return {"bets":total,"roi":round(pnl/total*100,2),
             "wr":round(wins/total*100,1),"pnl":round(pnl,2),
             "be":round(1/avg_dec*100,1)}
+
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 st.sidebar.title("🏀 WNBA Model")
@@ -416,6 +442,13 @@ page = st.sidebar.radio("Navigation", [
     "📈 Performance",
     "ℹ️ About",
 ], label_visibility="collapsed")
+
+st.sidebar.divider()
+odds_fmt = st.sidebar.selectbox(
+    "Odds format",
+    ["American", "Decimal", "Percentage"],
+    key="odds_fmt",
+)
 
 # Season-to-date sidebar stats
 try:
@@ -466,7 +499,7 @@ if page == "🏀 Today's Predictions":
         )
     with _btn_col:
         st.markdown('<div style="margin-top:4px"></div>', unsafe_allow_html=True)
-        _refresh_clicked = st.button("🔄 Refresh", use_container_width=True)
+        _refresh_clicked = st.button("🔄 Refresh", width='stretch')
 
     # Display MYT date in caption (US date + 1)
     _myt_display = (date.fromisoformat(selected_date) + timedelta(days=1)).strftime("%A, %B %d, %Y")
@@ -561,7 +594,11 @@ if page == "🏀 Today's Predictions":
                                         unsafe_allow_html=True)
                 with c2:
                     if pinn:
-                        st.markdown(f"**Pinnacle:** {ht} {fmt_ml(pinn.get('home',0))} / {at} {fmt_ml(pinn.get('away',0))}")
+                        _ph = pinn.get('home_decimal' if odds_fmt=="Decimal" else ('home_pct' if odds_fmt=="Percentage" else 'home'), 0)
+                        _pa = pinn.get('away_decimal' if odds_fmt=="Decimal" else ('away_pct' if odds_fmt=="Percentage" else 'away'), 0)
+                        _hs = f"{_ph:.2f}" if odds_fmt=="Decimal" else (f"{_ph:.1f}%" if odds_fmt=="Percentage" else fmt_ml(_ph))
+                        _as = f"{_pa:.2f}" if odds_fmt=="Decimal" else (f"{_pa:.1f}%" if odds_fmt=="Percentage" else fmt_ml(_pa))
+                        st.markdown(f"**Pinnacle:** {ht} {_hs} / {at} {_as}")
                     else:
                         st.caption("No Pinnacle line")
                 st.divider()
@@ -595,7 +632,7 @@ if page == "🏀 Today's Predictions":
         m1.metric("Games", len(preds))
         m2.metric("Flagged Bets", len(flagged), delta="⭐ BET" if len(flagged) > 0 else None)
         m3.metric("Min Edge", f"{live_min_edge}%")
-        m4.metric("Odds Range", f"+{live_min_odds}–+{live_max_odds}")
+        m4.metric("Odds Range", f"{fmt_odds(live_min_odds, odds_fmt)}–{fmt_odds(live_max_odds, odds_fmt)}")
         st.divider()
 
         # ── Flagged bets ──────────────────────────────────────────────────────
@@ -605,7 +642,8 @@ if page == "🏀 Today's Predictions":
             for _, row in flagged.iterrows():
                 rec      = str(row.get("recommendation",""))
                 bet_team = rec.split("BET ")[1].split(" ")[0] if "BET " in rec else "?"
-                odds_str = rec.split("(")[1].split(")")[0] if "(" in rec else "?"
+                odds_str     = rec.split("(")[1].split(")")[0] if "(" in rec else "?"
+                odds_display = fmt_odds(odds_str, odds_fmt)
                 edge_str = rec.split("Edge: ")[1].split("%")[0] if "Edge:" in rec else "?"
                 ev_str   = rec.split("EV: ")[1] if "EV:" in rec else "—"
                 kelly    = float(row.get("kelly_units", 0) or 0)
@@ -625,7 +663,7 @@ if page == "🏀 Today's Predictions":
     <div>
       <div style="color:#777;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.6px;margin-bottom:6px">{_sub}</div>
       <div style="font-size:22px;font-weight:800;color:#00c896">🎯 BET {bet_team}</div>
-      <div style="font-size:20px;font-weight:700;color:#eee;margin-top:3px">{odds_str}</div>
+      <div style="font-size:20px;font-weight:700;color:#eee;margin-top:3px">{odds_display}</div>
     </div>
     <div style="text-align:right">
       <div style="font-size:34px;font-weight:900;color:#00c896;line-height:1">{edge_str}%</div>
@@ -651,13 +689,13 @@ if page == "🏀 Today's Predictions":
                     with lc2:
                         st.markdown('<div style="margin-top:26px"></div>', unsafe_allow_html=True)
                         if already_logged:
-                            if st.button("🔄 Update", key=f"upd_{home}_{away}", use_container_width=True):
+                            if st.button("🔄 Update", key=f"upd_{home}_{away}", width='stretch'):
                                 _all_bets[existing_idx]["units"] = log_units
                                 save_bets(_all_bets)
                                 st.rerun()
                             st.caption("✅ Already logged")
                         else:
-                            if st.button(f"✅ Log {bet_team}", key=f"log_{home}_{away}", type="primary", use_container_width=True):
+                            if st.button(f"✅ Log {bet_team}", key=f"log_{home}_{away}", type="primary", width='stretch'):
                                 _all_bets.append({
                                     "date": selected_date, "home_team": home, "away_team": away,
                                     "bet_team": bet_team, "bet_odds": odds_str, "edge_pct": edge_str,
@@ -668,7 +706,7 @@ if page == "🏀 Today's Predictions":
                     with lc3:
                         if already_logged:
                             st.markdown('<div style="margin-top:26px"></div>', unsafe_allow_html=True)
-                            if st.button("🗑️", key=f"unlog_{home}_{away}", use_container_width=True):
+                            if st.button("🗑️", key=f"unlog_{home}_{away}", width='stretch'):
                                 _all_bets.pop(existing_idx)
                                 save_bets(_all_bets)
                                 st.rerun()
@@ -691,8 +729,24 @@ if page == "🏀 Today's Predictions":
             away_imp = float(row.get("away_injury_impact", 0) or 0)
 
             pinn   = _pinnacle(home, away)
-            pinn_h = pinn.get("home") if pinn else row.get("home_ml")
-            pinn_a = pinn.get("away") if pinn else row.get("away_ml")
+            # Prefer live odds; fall back to saved CSV odds (preserved after game ends)
+            pinn_h = pinn.get("home") if pinn else None
+            pinn_a = pinn.get("away") if pinn else None
+            saved_h = row.get("home_ml"); saved_a = row.get("away_ml")
+            if pinn_h is None and pd.notna(saved_h): pinn_h = saved_h
+            if pinn_a is None and pd.notna(saved_a): pinn_a = saved_a
+
+            # Result badge
+            home_won = row.get("home_won")
+            result   = row.get("result")
+            _result_s = ""
+            if pd.notna(home_won) and str(home_won) not in ("", "nan"):
+                hw = int(float(home_won))
+                _result_s = (
+                    f'<span style="background:rgba(0,200,150,.2);color:#00c896;font-size:11px;'
+                    f'font-weight:700;padding:2px 8px;border-radius:4px;margin-left:6px">'
+                    f'{"✅ " + home + " W" if hw == 1 else "✅ " + away + " W"}</span>'
+                )
 
             _gt      = _game_time_myt(home, away)
             _h_b2b_s = '<span style="background:rgba(245,166,35,.15);color:#f5a623;font-size:10px;font-weight:700;padding:1px 6px;border-radius:4px;margin-left:5px;vertical-align:middle">B2B</span>' if row.get("home_b2b") else ""
@@ -710,7 +764,15 @@ if page == "🏀 Today's Predictions":
             _odds_row = ""
             try:
                 if pinn_h is not None and pinn_a is not None:
-                    hs = fmt_ml(pinn_h); as_ = fmt_ml(pinn_a)
+                    _pinn_raw = _pinnacle(home, away)
+                    if odds_fmt == "Decimal" and _pinn_raw.get("home_decimal"):
+                        hs  = f"{_pinn_raw['home_decimal']:.2f}"
+                        as_ = f"{_pinn_raw['away_decimal']:.2f}"
+                    elif odds_fmt == "Percentage" and _pinn_raw.get("home_pct"):
+                        hs  = f"{_pinn_raw['home_pct']:.1f}%"
+                        as_ = f"{_pinn_raw['away_pct']:.1f}%"
+                    else:
+                        hs = fmt_odds(pinn_h, odds_fmt); as_ = fmt_odds(pinn_a, odds_fmt)
                     if edge_h is not None and str(edge_h) != "nan":
                         eh = float(edge_h); ea = float(edge_a)
                         hc = "#00c896" if eh > 3 else ("#ff4b4b" if eh < -1 else "#888")
@@ -742,7 +804,7 @@ if page == "🏀 Today's Predictions":
       <span style="color:#444;margin:0 8px;font-weight:400">vs</span>
       {away}{_a_b2b_s}
     </div>
-    <div style="display:flex;align-items:center;gap:8px">{_time_s}{_rec_s}</div>
+    <div style="display:flex;align-items:center;gap:8px">{_time_s}{_rec_s}{_result_s}</div>
   </div>
   <div style="background:rgba(255,255,255,0.07);border-radius:4px;height:6px;overflow:hidden">
     <div style="width:{p_home*100:.1f}%;height:100%;border-radius:4px;background:linear-gradient(90deg,#ff6b35,#f5a623)"></div>
@@ -818,6 +880,7 @@ if page == "🏀 Today's Predictions":
 
 elif page == "🔬 Filter Playground":
     st.title("🔬 Filter Playground")
+
     st.caption("Adjust filters and instantly see the impact on backtest performance.")
 
     # ── Data source selector ─────────────────────────────────────────────────
@@ -835,7 +898,7 @@ elif page == "🔬 Filter Playground":
     available_seasons = sorted(raw["season"].unique().tolist())
 
     # Only show validation + clean seasons (hide training seasons)
-    SHOW_SEASONS = CLEAN_SEASONS + VALID_SEASONS
+    SHOW_SEASONS = CLEAN_SEASONS + VALID_SEASONS + TRAIN_SEASONS
     raw = raw[raw["season"].isin(SHOW_SEASONS)]
     available_seasons = sorted(raw["season"].unique().tolist())
 
@@ -934,7 +997,7 @@ elif page == "🔬 Filter Playground":
         season_rows.append({"Season":s,"Bets":sm["bets"],"Win%":f"{sm['wr']:.1f}%",
                              "ROI":f"{sm['roi']:+.1f}%","P&L":f"{sm['pnl']:+.1f}u",
                              "Status":status})
-    st.dataframe(pd.DataFrame(season_rows), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(season_rows), width='stretch', hide_index=True)
 
     # Chart
     plot_data = [r for r in season_rows if r["ROI"] != "—"]
@@ -950,7 +1013,7 @@ elif page == "🔬 Filter Playground":
         fig.add_hline(y=0, line_dash="dot", line_color="gray")
         fig.update_layout(title="Total P&L by season (units)", height=300,
                           plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)")
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
 
     # Clean seasons info
     clean_df = filtered[filtered["season"].isin(CLEAN_SEASONS)] if not filtered.empty else pd.DataFrame()
@@ -1096,7 +1159,7 @@ elif page == "📋 Bet Tracker":
             for i, (idx, row) in enumerate(pending.iterrows()):
                 c1,c2,c3,c4 = st.columns([4,2,2,1])
                 with c1:
-                    st.write(f"**{row['bet_team']} ({row['bet_odds']})** — "
+                    st.write(f"**{row['bet_team']} ({fmt_odds(row['bet_odds'], odds_fmt)})** — "
                              f"{row['home_team']} vs {row['away_team']} · "
                              f"{row['date'].strftime('%b %d')}")
                 with c2:
@@ -1132,8 +1195,9 @@ elif page == "📋 Bet Tracker":
         display = df[["date","home_team","away_team","bet_team","bet_odds",
                        "edge_pct","units","result","pnl"]].copy()
         display["date"] = display["date"].dt.strftime("%b %d")
+        display["bet_odds"] = display["bet_odds"].apply(lambda x: fmt_odds(x, odds_fmt))
         display.columns = ["Date","Home","Away","Bet","Odds","Edge%","Units","Result","P&L"]
-        st.dataframe(display, use_container_width=True, hide_index=True)
+        st.dataframe(display, width='stretch', hide_index=True)
 
         st.divider()
         dl_bets = df[["date","home_team","away_team","bet_team","bet_odds",
@@ -1148,7 +1212,7 @@ elif page == "📋 Bet Tracker":
 
         with st.expander("🗑️ Delete a bet"):
             labels = [
-                f"{row['date'].strftime('%b %d')} — {row['bet_team']} ({row['bet_odds']}) "
+                f"{row['date'].strftime('%b %d')} — {row['bet_team']} ({fmt_odds(row['bet_odds'], odds_fmt)}) "
                 f"{row['home_team']} vs {row['away_team']} [{row['result']}]"
                 for _, row in df.iterrows()
             ]
@@ -1208,7 +1272,7 @@ elif page == "📈 Performance":
     fig.add_hline(y=0, line_dash="dot", line_color="gray", opacity=0.5)
     fig.update_layout(title="Cumulative P&L", height=350,
                       plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)")
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
 
     decided["month"] = decided["date"].dt.to_period("M").astype(str)
     monthly = decided.groupby("month").agg(
@@ -1224,14 +1288,14 @@ elif page == "📈 Performance":
                       title="Monthly P&L")
         fig2.update_layout(height=260, coloraxis_showscale=False,
                            plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)")
-        st.plotly_chart(fig2, use_container_width=True)
+        st.plotly_chart(fig2, width='stretch')
     with c2:
         fig3 = px.bar(monthly, x="month", y="roi",
                       color="roi", color_continuous_scale=["#A32D2D","#BA7517","#ff6b35"],
                       title="Monthly ROI %")
         fig3.update_layout(height=260, coloraxis_showscale=False,
                            plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)")
-        st.plotly_chart(fig3, use_container_width=True)
+        st.plotly_chart(fig3, width='stretch')
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE 5: ABOUT
@@ -1271,8 +1335,9 @@ elif page == "ℹ️ About":
     - **Injury reports:** ESPN
     - **Odds:** The Odds API (Pinnacle sharp line + major US books)
 
-    ### Model performance (backtest, 2024–2025)
+    ### Model performance (backtest, 2025)
     Backtested against Pinnacle closing lines — the sharpest available market.
+    2025 is the clean out-of-sample test season (never seen during training or calibration).
     See the **Filter Playground** tab for full season-by-season breakdown.
 
     ---
@@ -1286,4 +1351,4 @@ elif page == "ℹ️ About":
     """)
 
     st.divider()
-    st.caption("Model v2.0 · Trained May 2026 · WNBA seasons 2015–2025")
+    st.caption("Model v2.0 · Trained May 2026 · Train 2015–2023 | Valid 2024 | Test 2025 | Live 2026")

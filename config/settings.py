@@ -33,11 +33,11 @@ def _get_current_season() -> str:
     return str(d.year - 1)
 
 CURRENT_SEASON   = _get_current_season()
-VALID_SEASON     = "2025"  # Now training on 8 seasons (2015-2022)
+VALID_SEASON     = "2024"  # Calibration + early stopping; train = 2015–2023 (9 seasons)
 TEST_SEASON      = "2025"
-TEST_SEASON_2    = "2025"
+TEST_SEASON_2    = "2025"  # same as TEST_SEASON — no second holdout currently
 
-SEASONS      = ["2015", "2016", "2017", "2018", "2019", "2020", "2021", "2022", "2023", "2024", "2025"]
+SEASONS      = ["2015", "2016", "2017", "2018", "2019", "2020", "2021", "2022", "2023", "2024", "2025", "2026"]
 BACKTEST_SEASONS = ["2025"]
 SEASON_TYPES = ['Regular Season']
 
@@ -106,7 +106,7 @@ BET_UNDERDOGS_ONLY = False
 BET_AWAY_ONLY      = False
 
 KELLY_FRACTION     = 0.25
-MAX_BET_PCT        = 3.0
+MAX_BET_PCT        = 5.0
 MIN_BET_UNITS      = 0.5
 
 

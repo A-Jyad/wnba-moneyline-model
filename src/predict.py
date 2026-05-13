@@ -481,6 +481,42 @@ def predict_today(
 
     df = pd.DataFrame(results)
     out_path = LOG_DIR / f"predictions_{target_date}.csv"
+
+    # ── Preserve saved odds (disappear from API once game ends) ───────────────
+    if out_path.exists():
+        try:
+            existing = pd.read_csv(out_path)
+            for idx, row in df.iterrows():
+                ex = existing[
+                    (existing["home_team"] == row["home_team"]) &
+                    (existing["away_team"] == row["away_team"])
+                ]
+                if ex.empty:
+                    continue
+                ex0 = ex.iloc[0]
+                for col in ["home_ml", "away_ml"]:
+                    if pd.isna(row.get(col)) and pd.notna(ex0.get(col)):
+                        df.at[idx, col] = ex0[col]
+        except Exception as e:
+            log.debug(f"Odds preservation failed: {e}")
+
+    # ── Attach results from new_games (already fetched above) ─────────────────
+    try:
+        today_results = new_games[
+            pd.to_datetime(new_games["GAME_DATE"]).dt.strftime("%Y-%m-%d") == target_date
+        ] if not new_games.empty else pd.DataFrame()
+
+        if not today_results.empty:
+            for idx, row in df.iterrows():
+                home_row = today_results[today_results["TEAM_ABBREVIATION"] == row["home_team"]]
+                if not home_row.empty and pd.notna(home_row.iloc[0].get("WL")):
+                    wl = home_row.iloc[0]["WL"]
+                    df.at[idx, "home_won"] = 1 if wl == "W" else 0
+                    df.at[idx, "result"]   = wl
+            log.info(f"Results attached: {today_results[today_results['WL'].notna()]['TEAM_ABBREVIATION'].tolist()}")
+    except Exception as e:
+        log.debug(f"Result attachment failed: {e}")
+
     df.to_csv(out_path, index=False)
     log.info(f"Predictions saved: {out_path}")
     return df

@@ -119,15 +119,15 @@ def kelly_fraction_bet(model_prob: float, decimal_odds: float,
     if full_kelly <= 0:
         return 0.0
 
-    return min(full_kelly * fraction, MAX_BET_PCT / 100)
+    return full_kelly * fraction
 
 
 def kelly_units(model_prob: float, decimal_odds: float,
                  bankroll_units: float = 100.0) -> float:
-    """Return Kelly bet size in units given a bankroll."""
+    """Return Kelly bet size as % of bankroll, capped at MAX_BET_PCT."""
     frac = kelly_fraction_bet(model_prob, decimal_odds)
-    units = frac * bankroll_units
-    return max(round(units, 2), MIN_BET_UNITS if frac > 0 else 0)
+    pct = min(round(frac * 100, 2), MAX_BET_PCT)
+    return max(pct, MIN_BET_UNITS if frac > 0 else 0)
 
 
 # ── Bet Evaluation ────────────────────────────────────────────────────────────
@@ -204,10 +204,8 @@ def evaluate_game(
         # 2. No extreme longshots — >+500 ROI: -12.5%
         if bet_odds > max_odds:
             discard = True
-        # 3. No near-even odds — dead zone is approx -140 to +140, ROI: -27.0%
-        # Keep only: real underdogs above +140 (already ensured by underdogs_only)
-        # This cuts the near-even range where model has no reliable edge
-        if bet_odds <= abs(min_odds):   # skip if odds <= +140
+        # 3. No near-even underdogs — +100 to +min_odds range has poor edge reliability
+        if bet_odds > 0 and bet_odds <= abs(min_odds):
             discard = True
         # 4. No extreme edge — >30% edge means model overconfident, ROI: -33.5%
         if bet_edge is not None and bet_edge > max_edge:

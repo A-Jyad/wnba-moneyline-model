@@ -76,7 +76,7 @@ def load_predictions(season: str) -> pd.DataFrame:
     return preds
 
 
-def backtest_book(preds, odds, book_key, season_label, min_edge=15.0):
+def backtest_book(preds, odds, book_key, season_label, min_edge=12.0):
     """Run backtest for one bookmaker."""
     from config.settings import (BET_MAX_ODDS, BET_MIN_ODDS, BET_UNDERDOGS_ONLY,
                                   BET_MAX_EDGE, BET_AWAY_ONLY)
@@ -241,7 +241,7 @@ if __name__ == "__main__":
     parser.add_argument("--all",         action="store_true")
     parser.add_argument("--csv",         default=None)
     parser.add_argument("--file_season", type=int, default=2024)
-    parser.add_argument("--edge",        type=float, default=15.0)
+    parser.add_argument("--edge",        type=float, default=12.0)
     args = parser.parse_args()
 
     if args.all:

@@ -47,6 +47,13 @@ ODDS_API_BASE = "https://api.the-odds-api.com/v4"
 BOOKS   = ["draftkings", "fanduel", "onexbet", "betfair_ex_eu", "unibet_uk", "betsson", "nordicbet", "pinnacle"]
 REGIONS = "us,eu,uk"
 
+def _to_dec(ml: float) -> float:
+    return ml / 100 + 1 if ml > 0 else 100 / abs(ml) + 1
+
+def _to_pct(ml: float) -> float:
+    """Raw implied probability as 0-100 (includes vig)."""
+    return 100 / (ml + 100) * 100 if ml > 0 else abs(ml) / (abs(ml) + 100) * 100
+
 # Standard team name -> abbreviation for The Odds API
 ODDS_API_TEAM_MAP = {
     'Atlanta Dream'          : 'ATL',
@@ -173,7 +180,14 @@ def parse_odds_api(data: list[dict], filter_date: str | None = None) -> list[dic
                         elif outcome["name"] == away_full:
                             away_odds = outcome["price"]
                     if home_odds and away_odds:
-                        books[key] = {"home": home_odds, "away": away_odds}
+                        books[key] = {
+                            "home":         home_odds,
+                            "away":         away_odds,
+                            "home_decimal": round(_to_dec(home_odds), 3),
+                            "away_decimal": round(_to_dec(away_odds), 3),
+                            "home_pct":     round(_to_pct(home_odds), 1),
+                            "away_pct":     round(_to_pct(away_odds), 1),
+                        }
 
         if not books:
             continue
