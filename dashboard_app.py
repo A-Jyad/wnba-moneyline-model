@@ -29,14 +29,44 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-    header {visibility: hidden;}
-    [data-testid="stToolbar"] {visibility: hidden;}
-    [data-testid="stDeployButton"] {visibility: hidden;}
-    [data-testid="stDecoration"] {display: none;}
-    [data-testid="stStatusWidget"] {visibility: hidden;}
+    #MainMenu {display: none !important;}
+    footer {display: none !important;}
+    header {display: none !important;}
+    [data-testid="stToolbar"] {display: none !important;}
+    [data-testid="stDeployButton"] {display: none !important;}
+    [data-testid="stDecoration"] {display: none !important;}
+    [data-testid="stStatusWidget"] {display: none !important;}
+    [data-testid="stToolbarActions"] {display: none !important;}
+    [data-testid="stAppToolbar"] {display: none !important;}
+    [data-testid="stActionButton"] {display: none !important;}
+    .stActionButton {display: none !important;}
+    ._profileContainer_gzau3_53 {display: none !important;}
+    ._userAvatar_gzau3_69 {display: none !important;}
+    section[data-testid="stSidebar"] ~ div > div:last-child {display: none !important;}
 </style>
+<script>
+    (function() {
+        const SELECTORS = [
+            '[data-testid="stStatusWidget"]',
+            '[data-testid="stToolbar"]',
+            '[data-testid="stAppToolbar"]',
+            '[data-testid="stToolbarActions"]',
+            '[data-testid="stDeployButton"]',
+            '[data-testid="stActionButton"]',
+            '#MainMenu', 'footer', 'header',
+        ];
+        function hideAll() {
+            SELECTORS.forEach(sel => {
+                document.querySelectorAll(sel).forEach(el => {
+                    el.style.setProperty('display', 'none', 'important');
+                });
+            });
+        }
+        hideAll();
+        const observer = new MutationObserver(hideAll);
+        observer.observe(document.body, {childList: true, subtree: true});
+    })();
+</script>
 """, unsafe_allow_html=True)
 
 ROOT = Path(__file__).parent
